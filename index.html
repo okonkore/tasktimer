@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>よみあげタイマー</title>
+    <link rel="stylesheet" href="./styles.css?v=20260703-timer" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="timer-panel" aria-label="タイマー">
+        <header class="app-header">
+          <div>
+            <h1>よみあげタイマー</h1>
+            <p>順番に進むタスクタイマー</p>
+          </div>
+          <button class="icon-button add-button" id="addTaskBtn" type="button" aria-label="タスクを追加">+</button>
+        </header>
+
+        <section class="now-view" aria-live="polite">
+          <p class="status-label" id="timerStatus">待機中</p>
+          <h2 id="currentTaskName">タスクを追加してください</h2>
+          <div class="time-display" id="timeDisplay">00:00</div>
+          <div class="progress-track" aria-hidden="true">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+        </section>
+
+        <div class="control-bar" role="toolbar" aria-label="タイマー操作">
+          <button class="primary-button" id="startPauseBtn" type="button">開始</button>
+          <button class="secondary-button" id="resetBtn" type="button">リセット</button>
+          <button class="secondary-button" id="nextBtn" type="button">次へ</button>
+        </div>
+
+        <section class="task-section" aria-label="タスク一覧">
+          <div class="section-heading">
+            <h2>タスク一覧</h2>
+            <span id="taskCount">0件</span>
+          </div>
+          <div class="task-list" id="taskList"></div>
+          <p class="empty-state" id="emptyState">+ ボタンからタスクを追加できます</p>
+        </section>
+      </section>
+    </main>
+
+    <dialog class="task-dialog" id="taskDialog">
+      <form method="dialog" id="taskForm">
+        <div class="dialog-header">
+          <h2 id="dialogTitle">タスクを追加</h2>
+          <button class="icon-button" id="closeDialogBtn" type="button" aria-label="閉じる">×</button>
+        </div>
+
+        <label class="field">
+          <span>やること</span>
+          <input id="taskNameInput" type="text" maxlength="80" autocomplete="off" required />
+        </label>
+
+        <div class="time-fields">
+          <label class="field">
+            <span>分</span>
+            <input id="taskMinutesInput" type="number" min="0" max="999" step="1" inputmode="numeric" />
+          </label>
+          <label class="field">
+            <span>秒</span>
+            <input id="taskSecondsInput" type="number" min="0" max="59" step="1" inputmode="numeric" />
+          </label>
+        </div>
+
+        <p class="form-error" id="formError" role="alert"></p>
+
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancelDialogBtn" type="button">キャンセル</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./client.js?v=20260703-timer"></script>
+  </body>
+</html>
