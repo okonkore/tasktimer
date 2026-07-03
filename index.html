@@ -3,23 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>よみあげタイマー</title>
-    <link rel="stylesheet" href="./styles.css?v=20260703-timer" />
+    <title>よみあげタスクタイマー</title>
+    <link rel="stylesheet" href="./styles.css?v=20260704-stock-list-add-total" />
   </head>
   <body>
     <main class="app-shell">
-      <section class="timer-panel" aria-label="タイマー">
-        <header class="app-header">
-          <div>
-            <h1>よみあげタイマー</h1>
+      <section class="timer-panel view active" id="timerView" aria-label="タイマー">
+        <header class="app-header timer-header">
+          <button class="icon-button menu-button" id="openStockBtn" type="button" aria-label="タスクストックを開く">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <div class="app-title">
+            <h1>よみあげタスクタイマー</h1>
             <p>順番に進むタスクタイマー</p>
           </div>
-          <button class="icon-button add-button" id="addTaskBtn" type="button" aria-label="タスクを追加">+</button>
         </header>
 
         <section class="now-view" aria-live="polite">
           <p class="status-label" id="timerStatus">待機中</p>
-          <h2 id="currentTaskName">タスクを追加してください</h2>
+          <h2 id="currentTaskName">ストックからタスクを追加してください</h2>
           <div class="time-display" id="timeDisplay">00:00</div>
           <div class="progress-track" aria-hidden="true">
             <div class="progress-fill" id="progressFill"></div>
@@ -32,28 +36,45 @@
           <button class="secondary-button" id="nextBtn" type="button">次へ</button>
         </div>
 
-        <section class="task-section" aria-label="タスク一覧">
+        <section class="task-section" aria-label="アクティブタイムライン">
           <div class="section-heading">
-            <h2>タスク一覧</h2>
+            <h2>アクティブタイムライン</h2>
             <span id="taskCount">0件</span>
           </div>
           <div class="task-list" id="taskList"></div>
-          <p class="empty-state" id="emptyState">+ ボタンからタスクを追加できます</p>
+          <p class="empty-state" id="emptyState">タスクストックからアクティブタイムラインへ追加できます</p>
+        </section>
+      </section>
+
+      <section class="timer-panel view" id="stockView" aria-label="タスクストック">
+        <header class="app-header">
+          <button class="icon-button" id="backToTimerBtn" type="button" aria-label="タイマーへ戻る">←</button>
+          <div class="app-title">
+            <h1>タスクストック</h1>
+            <p>やりたいことを名前だけでためておく場所</p>
+          </div>
+          <button class="icon-button add-button" id="addStockBtn" type="button" aria-label="ストックを追加">+</button>
+        </header>
+
+        <section class="task-section stock-section" aria-label="ストック一覧">
+          <div class="section-heading">
+            <h2>ストック一覧</h2>
+            <span id="stockCount">0件</span>
+          </div>
+          <div class="task-list" id="stockList"></div>
+          <p class="empty-state" id="stockEmptyState">+ ボタンからストックを追加できます</p>
         </section>
       </section>
     </main>
 
-    <dialog class="task-dialog" id="taskDialog">
-      <form method="dialog" id="taskForm">
+    <dialog class="task-dialog" id="timeDialog">
+      <form method="dialog" id="timeForm">
         <div class="dialog-header">
-          <h2 id="dialogTitle">タスクを追加</h2>
-          <button class="icon-button" id="closeDialogBtn" type="button" aria-label="閉じる">×</button>
+          <h2 id="timeDialogTitle">時間を設定</h2>
+          <button class="icon-button" id="closeTimeDialogBtn" type="button" aria-label="閉じる">×</button>
         </div>
 
-        <label class="field">
-          <span>やること</span>
-          <input id="taskNameInput" type="text" maxlength="80" autocomplete="off" required />
-        </label>
+        <p class="selected-stock-name" id="selectedStockName"></p>
 
         <div class="time-fields">
           <label class="field">
@@ -66,15 +87,36 @@
           </label>
         </div>
 
-        <p class="form-error" id="formError" role="alert"></p>
+        <p class="form-error" id="timeFormError" role="alert"></p>
 
         <div class="dialog-actions">
-          <button class="secondary-button" id="cancelDialogBtn" type="button">キャンセル</button>
+          <button class="secondary-button" id="cancelTimeDialogBtn" type="button">キャンセル</button>
+          <button class="primary-button" id="saveTimeBtn" type="submit">タイムラインへ追加</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="task-dialog" id="stockDialog">
+      <form method="dialog" id="stockForm">
+        <div class="dialog-header">
+          <h2 id="stockDialogTitle">ストックを追加</h2>
+          <button class="icon-button" id="closeStockDialogBtn" type="button" aria-label="閉じる">×</button>
+        </div>
+
+        <label class="field">
+          <span>やること</span>
+          <input id="stockNameInput" type="text" maxlength="80" autocomplete="off" required />
+        </label>
+
+        <p class="form-error" id="stockFormError" role="alert"></p>
+
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancelStockDialogBtn" type="button">キャンセル</button>
           <button class="primary-button" type="submit">保存</button>
         </div>
       </form>
     </dialog>
 
-    <script src="./client.js?v=20260703-timer"></script>
+    <script src="./client.js?v=20260704-stock-list-add-total"></script>
   </body>
 </html>

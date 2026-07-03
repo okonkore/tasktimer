@@ -10,7 +10,6 @@
   --accent-dark: #11534f;
   --accent-soft: #d9efeb;
   --danger: #b4233a;
-  --warning: #cc7a00;
   --shadow: 0 18px 44px rgba(25, 39, 45, 0.13);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
@@ -61,7 +60,6 @@ button:disabled {
 .timer-panel {
   width: min(760px, 100%);
   min-height: min(900px, calc(100dvh - 28px));
-  display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 18px;
@@ -69,6 +67,14 @@ button:disabled {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--shadow);
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: flex;
 }
 
 .app-header,
@@ -82,8 +88,17 @@ button:disabled {
 }
 
 .app-header {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   gap: 12px;
+}
+
+.timer-header {
+  grid-template-columns: 48px minmax(0, 1fr);
+}
+
+.app-title {
+  min-width: 0;
 }
 
 .app-header h1,
@@ -91,11 +106,13 @@ button:disabled {
 .section-heading h2,
 .now-view h2,
 .empty-state,
-.status-label {
+.status-label,
+.selected-stock-name {
   margin: 0;
 }
 
 .app-header h1 {
+  overflow-wrap: anywhere;
   font-size: 24px;
   line-height: 1.15;
   letter-spacing: 0;
@@ -124,6 +141,20 @@ button:disabled {
   border-radius: 8px;
   color: var(--ink);
   background: #fff;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.menu-button {
+  gap: 4px;
+  align-content: center;
+}
+
+.menu-button span {
+  width: 20px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .add-button {
@@ -133,7 +164,6 @@ button:disabled {
   background: var(--accent);
   border-color: var(--accent);
   font-size: 30px;
-  line-height: 1;
 }
 
 .now-view {
@@ -187,8 +217,7 @@ button:disabled {
 }
 
 .primary-button,
-.secondary-button,
-.danger-button {
+.secondary-button {
   min-height: 48px;
   padding: 0 16px;
   border-radius: 8px;
@@ -206,17 +235,16 @@ button:disabled {
   background: #fff;
 }
 
-.danger-button {
-  color: #fff;
-  background: var(--danger);
-}
-
 .task-section {
   min-height: 0;
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 10px;
+}
+
+.stock-section {
+  padding-top: 8px;
 }
 
 .section-heading {
@@ -248,6 +276,11 @@ button:disabled {
   border-radius: 8px;
   background: #fff;
   touch-action: none;
+}
+
+.stock-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  touch-action: auto;
 }
 
 .task-item.active {
@@ -315,7 +348,8 @@ button:disabled {
 }
 
 .task-dialog {
-  width: min(420px, calc(100vw - 28px));
+  width: min(460px, calc(100vw - 28px));
+  max-height: min(720px, calc(100dvh - 28px));
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -341,6 +375,14 @@ button:disabled {
 .dialog-header h2 {
   margin: 0;
   font-size: 19px;
+}
+
+.selected-stock-name {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  overflow-wrap: anywhere;
+  font-weight: 740;
 }
 
 .field {
@@ -396,6 +438,19 @@ button:disabled {
     box-shadow: none;
   }
 
+  .app-header {
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+  }
+
+  .timer-header {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .add-button {
+    width: 42px;
+    height: 42px;
+  }
+
   .control-bar {
     grid-template-columns: 1fr 1fr;
   }
@@ -408,8 +463,16 @@ button:disabled {
     grid-template-columns: 40px minmax(0, 1fr);
   }
 
+  .stock-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .task-actions {
     grid-column: 2;
     justify-content: flex-start;
+  }
+
+  .stock-item .task-actions {
+    grid-column: 1;
   }
 }
