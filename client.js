@@ -46,6 +46,7 @@ let editingTimelineId = null;
 let activeIndex = 0;
 let remainingSeconds = 0;
 let totalSeconds = 0;
+let oneMinuteWarningTaskId = null;
 let timerId = null;
 let mode = "idle";
 let audioContext = null;
@@ -321,6 +322,7 @@ function resetTimerState(index = 0) {
   const current = state.timeline[activeIndex];
   remainingSeconds = current?.seconds || 0;
   totalSeconds = current?.seconds || 0;
+  oneMinuteWarningTaskId = null;
   mode = "idle";
   render();
 }
@@ -338,6 +340,7 @@ function startOrPause() {
     activeIndex = Math.min(activeIndex, state.timeline.length - 1);
     remainingSeconds = state.timeline[activeIndex].seconds;
     totalSeconds = state.timeline[activeIndex].seconds;
+    oneMinuteWarningTaskId = null;
     speak(`最初は、${getTimelineTaskName(state.timeline[activeIndex])}です`);
   }
 
@@ -365,7 +368,17 @@ function tick() {
     completeCurrentTask();
     return;
   }
+  announceOneMinuteRemaining();
   updateDisplay();
+}
+
+function announceOneMinuteRemaining() {
+  const current = state.timeline[activeIndex];
+  if (!current || totalSeconds <= 60 || remainingSeconds !== 60) return;
+  if (oneMinuteWarningTaskId === current.id) return;
+
+  oneMinuteWarningTaskId = current.id;
+  speak(`${getTimelineTaskName(current)}、残り1分です`);
 }
 
 function completeCurrentTask() {
@@ -384,6 +397,7 @@ function completeCurrentTask() {
   activeIndex = nextIndex;
   remainingSeconds = state.timeline[activeIndex].seconds;
   totalSeconds = state.timeline[activeIndex].seconds;
+  oneMinuteWarningTaskId = null;
   speak(`次は、${getTimelineTaskName(state.timeline[activeIndex])}です`);
   startTimer();
 }
