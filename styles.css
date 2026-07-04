@@ -147,16 +147,14 @@ button:disabled {
   line-height: 1;
 }
 
-.menu-button {
-  gap: 4px;
-  align-content: center;
-}
-
-.menu-button span {
-  width: 20px;
-  height: 2px;
-  border-radius: 999px;
-  background: currentColor;
+.folder-button::before {
+  content: "";
+  width: 24px;
+  height: 18px;
+  display: block;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  background: linear-gradient(currentColor, currentColor) 2px -3px / 10px 7px no-repeat;
 }
 
 .add-button {
@@ -287,7 +285,7 @@ button:disabled {
 }
 
 .stock-item {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   touch-action: auto;
 }
 
@@ -308,12 +306,24 @@ button:disabled {
 .drag-handle {
   width: 42px;
   height: 42px;
+  display: inline-grid;
+  place-items: center;
   border-radius: 8px;
   color: var(--muted);
   background: var(--panel-strong);
-  font-size: 22px;
   cursor: grab;
   touch-action: none;
+}
+
+.drag-handle::before {
+  content: "";
+  width: 20px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow:
+    0 -6px 0 currentColor,
+    0 6px 0 currentColor;
 }
 
 .task-main {
@@ -480,7 +490,7 @@ button:disabled {
   }
 
   .stock-item {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
   }
 
   .task-actions {

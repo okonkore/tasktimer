@@ -51,6 +51,7 @@ let timerId = null;
 let mode = "idle";
 let audioContext = null;
 let draggingTaskId = null;
+let draggingList = null;
 let pointerDrag = null;
 
 render();
@@ -162,16 +163,16 @@ function renderTimeline() {
     item.className = "task-item";
     item.draggable = true;
     item.dataset.id = task.id;
+    item.dataset.list = "timeline";
     if (index === activeIndex && mode !== "idle") item.classList.add("active");
-    if (task.id === draggingTaskId) item.classList.add("dragging");
+    if (task.id === draggingTaskId && draggingList === "timeline") item.classList.add("dragging");
 
     const handle = document.createElement("button");
     handle.className = "drag-handle";
     handle.type = "button";
-    handle.textContent = "↕";
     handle.title = "並び替え";
     handle.setAttribute("aria-label", "並び替え");
-    handle.addEventListener("pointerdown", (event) => beginPointerDrag(event, task.id));
+    handle.addEventListener("pointerdown", (event) => beginPointerDrag(event, "timeline", task.id));
 
     const main = document.createElement("div");
     main.className = "task-main";
@@ -206,19 +207,23 @@ function renderTimeline() {
 
     item.addEventListener("dragstart", (event) => {
       draggingTaskId = task.id;
+      draggingList = "timeline";
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", task.id);
+      event.dataTransfer.setData("application/x-task-list", "timeline");
       render();
     });
 
     item.addEventListener("dragover", (event) => {
       event.preventDefault();
       const fromId = event.dataTransfer.getData("text/plain") || draggingTaskId;
-      if (fromId && fromId !== task.id) reorderTimelineTask(fromId, task.id);
+      const fromList = event.dataTransfer.getData("application/x-task-list") || draggingList;
+      if (fromList === "timeline" && fromId && fromId !== task.id) reorderTimelineTask(fromId, task.id);
     });
 
     item.addEventListener("dragend", () => {
       draggingTaskId = null;
+      draggingList = null;
       render();
     });
 
@@ -234,6 +239,17 @@ function renderStocks() {
   state.stocks.forEach((stock) => {
     const item = document.createElement("article");
     item.className = "task-item stock-item";
+    item.draggable = true;
+    item.dataset.id = stock.id;
+    item.dataset.list = "stock";
+    if (stock.id === draggingTaskId && draggingList === "stock") item.classList.add("dragging");
+
+    const handle = document.createElement("button");
+    handle.className = "drag-handle";
+    handle.type = "button";
+    handle.title = "並び替え";
+    handle.setAttribute("aria-label", "並び替え");
+    handle.addEventListener("pointerdown", (event) => beginPointerDrag(event, "stock", stock.id));
 
     const main = document.createElement("div");
     main.className = "task-main";
@@ -270,7 +286,30 @@ function renderStocks() {
     remove.addEventListener("click", () => deleteStock(stock.id));
 
     actions.append(add, edit, remove);
-    item.append(main, actions);
+    item.append(handle, main, actions);
+
+    item.addEventListener("dragstart", (event) => {
+      draggingTaskId = stock.id;
+      draggingList = "stock";
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", stock.id);
+      event.dataTransfer.setData("application/x-task-list", "stock");
+      render();
+    });
+
+    item.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      const fromId = event.dataTransfer.getData("text/plain") || draggingTaskId;
+      const fromList = event.dataTransfer.getData("application/x-task-list") || draggingList;
+      if (fromList === "stock" && fromId && fromId !== stock.id) reorderStock(fromId, stock.id);
+    });
+
+    item.addEventListener("dragend", () => {
+      draggingTaskId = null;
+      draggingList = null;
+      render();
+    });
+
     els.stockList.append(item);
   });
 }
@@ -572,10 +611,22 @@ function reorderTimelineTask(fromId, toId) {
   render();
 }
 
-function beginPointerDrag(event, taskId) {
+function reorderStock(fromId, toId) {
+  const fromIndex = state.stocks.findIndex((stock) => stock.id === fromId);
+  const toIndex = state.stocks.findIndex((stock) => stock.id === toId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+  const [moved] = state.stocks.splice(fromIndex, 1);
+  state.stocks.splice(toIndex, 0, moved);
+  saveState();
+  render();
+}
+
+function beginPointerDrag(event, list, taskId) {
   event.preventDefault();
-  pointerDrag = { taskId };
+  pointerDrag = { list, taskId };
   draggingTaskId = taskId;
+  draggingList = list;
   event.currentTarget.setPointerCapture?.(event.pointerId);
   document.addEventListener("pointermove", movePointerDrag);
   document.addEventListener("pointerup", finishPointerDrag);
@@ -587,12 +638,17 @@ function movePointerDrag(event) {
   if (!pointerDrag) return;
   const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".task-item");
   const targetId = target?.dataset.id;
-  if (targetId && targetId !== pointerDrag.taskId) reorderTimelineTask(pointerDrag.taskId, targetId);
+  const targetList = target?.dataset.list;
+  if (!targetId || targetId === pointerDrag.taskId || targetList !== pointerDrag.list) return;
+
+  if (pointerDrag.list === "timeline") reorderTimelineTask(pointerDrag.taskId, targetId);
+  if (pointerDrag.list === "stock") reorderStock(pointerDrag.taskId, targetId);
 }
 
 function finishPointerDrag() {
   pointerDrag = null;
   draggingTaskId = null;
+  draggingList = null;
   document.removeEventListener("pointermove", movePointerDrag);
   document.removeEventListener("pointerup", finishPointerDrag);
   document.removeEventListener("pointercancel", finishPointerDrag);
