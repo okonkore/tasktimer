@@ -330,7 +330,9 @@ button:disabled {
 }
 
 .task-actions {
+  justify-content: flex-end;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .small-button {
@@ -470,7 +472,7 @@ button:disabled {
   }
 
   .task-item {
-    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-columns: 40px minmax(0, 1fr) auto;
   }
 
   .stock-item {
@@ -478,8 +480,7 @@ button:disabled {
   }
 
   .task-actions {
-    grid-column: 2;
-    justify-content: flex-start;
+    grid-column: auto;
   }
 
   .stock-item .task-actions {
