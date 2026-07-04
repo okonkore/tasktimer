@@ -59,10 +59,12 @@ button:disabled {
 
 .timer-panel {
   width: min(760px, 100%);
-  min-height: min(900px, calc(100dvh - 28px));
+  height: min(900px, calc(100dvh - 28px));
+  min-height: 0;
   flex-direction: column;
   gap: 16px;
   padding: 18px;
+  overflow: hidden;
   border: 1px solid rgba(30, 37, 40, 0.08);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.94);
@@ -241,6 +243,7 @@ button:disabled {
   flex: 1;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
 }
 
 .stock-section {
@@ -263,6 +266,11 @@ button:disabled {
 .task-list {
   display: grid;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .task-item {
@@ -275,7 +283,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .stock-item {
@@ -301,6 +309,7 @@ button:disabled {
   background: var(--panel-strong);
   font-size: 22px;
   cursor: grab;
+  touch-action: none;
 }
 
 .task-main {
@@ -432,7 +441,8 @@ button:disabled {
   }
 
   .timer-panel {
-    min-height: 100dvh;
+    height: 100dvh;
+    min-height: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;

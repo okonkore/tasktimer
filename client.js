@@ -341,7 +341,7 @@ function startOrPause() {
     remainingSeconds = state.timeline[activeIndex].seconds;
     totalSeconds = state.timeline[activeIndex].seconds;
     oneMinuteWarningTaskId = null;
-    speak(`最初は、${getTimelineTaskName(state.timeline[activeIndex])}です`);
+    speakTimelineStart("最初は", state.timeline[activeIndex]);
   }
 
   startTimer();
@@ -381,6 +381,10 @@ function announceOneMinuteRemaining() {
   speak(`${getTimelineTaskName(current)}、残り1分です`);
 }
 
+function speakTimelineStart(prefix, task) {
+  speak(`${prefix}、${getTimelineTaskName(task)}、${formatDuration(task.seconds)}です`);
+}
+
 function completeCurrentTask() {
   stopTicker();
   playAlarm();
@@ -398,7 +402,7 @@ function completeCurrentTask() {
   remainingSeconds = state.timeline[activeIndex].seconds;
   totalSeconds = state.timeline[activeIndex].seconds;
   oneMinuteWarningTaskId = null;
-  speak(`次は、${getTimelineTaskName(state.timeline[activeIndex])}です`);
+  speakTimelineStart("次は", state.timeline[activeIndex]);
   startTimer();
 }
 
