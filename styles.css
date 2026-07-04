@@ -291,6 +291,10 @@ button:disabled {
   touch-action: auto;
 }
 
+.stock-item .task-actions {
+  align-self: center;
+}
+
 .task-item.active {
   border-color: var(--accent);
   box-shadow: inset 4px 0 0 var(--accent);
@@ -476,7 +480,7 @@ button:disabled {
   }
 
   .stock-item {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .task-actions {
@@ -484,6 +488,6 @@ button:disabled {
   }
 
   .stock-item .task-actions {
-    grid-column: 1;
+    grid-column: auto;
   }
 }
