@@ -1,5 +1,6 @@
 const storageKey = "read-aloud-task-timer-v2";
 const legacyStorageKey = "read-aloud-task-timer-v1";
+const announcementThresholds = [1800, 900, 600, 300, 180, 60, 30, 10];
 
 const els = {
   timerView: document.querySelector("#timerView"),
@@ -46,7 +47,7 @@ let editingTimelineId = null;
 let activeIndex = 0;
 let remainingSeconds = 0;
 let totalSeconds = 0;
-let oneMinuteWarningTaskId = null;
+let announcedRemainingSeconds = new Set();
 let timerId = null;
 let mode = "idle";
 let audioContext = null;
@@ -361,7 +362,7 @@ function resetTimerState(index = 0) {
   const current = state.timeline[activeIndex];
   remainingSeconds = current?.seconds || 0;
   totalSeconds = current?.seconds || 0;
-  oneMinuteWarningTaskId = null;
+  resetAnnouncementMarkers();
   mode = "idle";
   render();
 }
@@ -379,7 +380,7 @@ function startOrPause() {
     activeIndex = Math.min(activeIndex, state.timeline.length - 1);
     remainingSeconds = state.timeline[activeIndex].seconds;
     totalSeconds = state.timeline[activeIndex].seconds;
-    oneMinuteWarningTaskId = null;
+    resetAnnouncementMarkers();
     speakTimelineStart("最初は", state.timeline[activeIndex]);
   }
 
@@ -407,17 +408,16 @@ function tick() {
     completeCurrentTask();
     return;
   }
-  announceOneMinuteRemaining();
+  announceRemainingTime();
   updateDisplay();
 }
 
-function announceOneMinuteRemaining() {
-  const current = state.timeline[activeIndex];
-  if (!current || totalSeconds <= 60 || remainingSeconds !== 60) return;
-  if (oneMinuteWarningTaskId === current.id) return;
+function announceRemainingTime() {
+  if (!announcementThresholds.includes(remainingSeconds)) return;
+  if (announcedRemainingSeconds.has(remainingSeconds)) return;
 
-  oneMinuteWarningTaskId = current.id;
-  speak(`${getTimelineTaskName(current)}、残り1分です`);
+  announcedRemainingSeconds.add(remainingSeconds);
+  speak(`残り${formatAnnouncementTime(remainingSeconds)}です`);
 }
 
 function speakTimelineStart(prefix, task) {
@@ -440,7 +440,7 @@ function completeCurrentTask() {
   activeIndex = nextIndex;
   remainingSeconds = state.timeline[activeIndex].seconds;
   totalSeconds = state.timeline[activeIndex].seconds;
-  oneMinuteWarningTaskId = null;
+  resetAnnouncementMarkers();
   speakTimelineStart("次は", state.timeline[activeIndex]);
   startTimer();
 }
@@ -454,6 +454,10 @@ function skipToNext() {
 function stopTicker() {
   if (timerId) window.clearInterval(timerId);
   timerId = null;
+}
+
+function resetAnnouncementMarkers() {
+  announcedRemainingSeconds = new Set();
 }
 
 function showTimerView() {
@@ -707,6 +711,11 @@ function speak(text) {
   utterance.rate = 1;
   utterance.pitch = 1;
   window.speechSynthesis.speak(utterance);
+}
+
+function formatAnnouncementTime(seconds) {
+  if (seconds >= 60) return `${Math.floor(seconds / 60)}分`;
+  return `${seconds}秒`;
 }
 
 function formatClock(seconds) {
