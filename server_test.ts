@@ -85,3 +85,33 @@ Deno.test("chat room API routes use the configured handler", async () => {
     "room collection and item routes should be delegated",
   );
 });
+
+Deno.test("chat join request API routes use the configured handler", async () => {
+  const handledPaths: string[] = [];
+  const dependencies = {
+    chatJoinRequestHandler: (request: Request) => {
+      handledPaths.push(new URL(request.url).pathname);
+      return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
+    },
+  };
+  const room = "room-0000000000000001";
+  const paths = [
+    `/api/chat/rooms/${room}/requests`,
+    `/api/chat/rooms/${room}/requests/user-1/approve`,
+    `/api/chat/rooms/${room}/requests/user-1/reject`,
+  ];
+  for (const path of paths) {
+    const response = await handleRequest(
+      new Request(`http://localhost${path}`, { method: "POST" }),
+      dependencies,
+    );
+    assert(
+      response.status === 202,
+      "join request handler response should be returned",
+    );
+  }
+  assert(
+    JSON.stringify(handledPaths) === JSON.stringify(paths),
+    "all join request routes should be delegated",
+  );
+});

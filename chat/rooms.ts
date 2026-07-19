@@ -119,10 +119,43 @@ export class ChatRoomService {
   async getRoomForUser(
     roomId: string,
     userId: string,
-  ): Promise<{ room: Room; isOwner: boolean } | null> {
+  ): Promise<
+    | { room: Room; isOwner: boolean; membership: Member }
+    | {
+      access: {
+        status:
+          | "not-requested"
+          | "pending"
+          | "approved"
+          | "rejected"
+          | "removed";
+        rejectedUntil: string | null;
+        canRequest: boolean;
+      };
+    }
+    | null
+  > {
     const room = await this.#repository.getRoom(roomId);
     if (!room) return null;
-    return { room, isOwner: room.ownerId === userId };
+    const member = await this.#repository.getMember(roomId, userId);
+    if (member) {
+      return { room, isOwner: room.ownerId === userId, membership: member };
+    }
+
+    const request = await this.#repository.getJoinRequest(roomId, userId);
+    const rejectedUntil = request?.status === "rejected"
+      ? request.rejectedUntil
+      : null;
+    return {
+      access: {
+        status: request?.status ?? "not-requested",
+        rejectedUntil,
+        canRequest: !request || request.status === "removed" ||
+          (request.status === "rejected" &&
+            rejectedUntil !== null &&
+            this.#now().getTime() >= new Date(rejectedUntil).getTime()),
+      },
+    };
   }
 
   async updateRoom(
@@ -201,9 +234,19 @@ export class ChatRoomService {
       if (authenticated instanceof Response) return authenticated;
       const result = await this.getRoomForUser(roomId, authenticated.user.id);
       if (!result) return roomJson({ error: "Room not found" }, 404);
+      if ("access" in result) {
+        return roomJson(
+          { error: "Room membership required", access: result.access },
+          403,
+        );
+      }
       return roomJson({
         room: result.room,
         isOwner: result.isOwner,
+        membership: {
+          role: result.membership.role,
+          visibleFrom: result.membership.visibleFrom,
+        },
       });
     }
 

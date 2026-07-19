@@ -478,6 +478,13 @@ export class ChatRepository {
     return (await this.kv.get<Member>(chatKeys.member(roomId, userId))).value;
   }
 
+  async getMemberEntry(
+    roomId: string,
+    userId: string,
+  ): Promise<Deno.KvEntryMaybe<Member>> {
+    return await this.kv.get<Member>(chatKeys.member(roomId, userId));
+  }
+
   async countMembers(
     roomId: string,
     limit = chatLimits.maxRoomMembers + 1,
@@ -504,6 +511,111 @@ export class ChatRepository {
   ): Promise<JoinRequest | null> {
     return (await this.kv.get<JoinRequest>(chatKeys.request(roomId, userId)))
       .value;
+  }
+
+  async getJoinRequestEntry(
+    roomId: string,
+    userId: string,
+  ): Promise<Deno.KvEntryMaybe<JoinRequest>> {
+    return await this.kv.get<JoinRequest>(chatKeys.request(roomId, userId));
+  }
+
+  async listJoinRequests(
+    roomId: string,
+    status?: JoinRequestStatus,
+    limit = chatLimits.maxRoomMembers,
+  ): Promise<JoinRequest[]> {
+    const requests: JoinRequest[] = [];
+    const entries = this.kv.list<JoinRequest>(
+      { prefix: ["chat", "requests", roomId] },
+      { limit: Math.max(1, Math.floor(limit)) },
+    );
+    for await (const entry of entries) {
+      if (!status || entry.value.status === status) requests.push(entry.value);
+    }
+    requests.sort((left, right) =>
+      left.requestedAt.localeCompare(right.requestedAt)
+    );
+    return requests;
+  }
+
+  async replaceJoinRequest(
+    request: JoinRequest,
+    expectedRequestVersionstamp: string | null,
+    expectedMemberVersionstamp: string | null,
+    expectedRoomVersionstamp: string,
+  ): Promise<boolean> {
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(request.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.request(request.roomId, request.userId),
+          versionstamp: expectedRequestVersionstamp,
+        },
+        {
+          key: chatKeys.member(request.roomId, request.userId),
+          versionstamp: expectedMemberVersionstamp,
+        },
+      )
+      .set(chatKeys.request(request.roomId, request.userId), request)
+      .commit();
+    return result.ok;
+  }
+
+  async approveJoinRequest(
+    request: JoinRequest,
+    member: Member,
+    expectedRequestVersionstamp: string,
+    expectedRoomVersionstamp: string,
+  ): Promise<boolean> {
+    const memberKey = chatKeys.member(member.roomId, member.userId);
+    const memberIndexKey = chatKeys.roomByMember(member.userId, member.roomId);
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(request.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.request(request.roomId, request.userId),
+          versionstamp: expectedRequestVersionstamp,
+        },
+        { key: memberKey, versionstamp: null },
+        { key: memberIndexKey, versionstamp: null },
+      )
+      .set(chatKeys.request(request.roomId, request.userId), request)
+      .set(memberKey, member)
+      .set(memberIndexKey, member.roomId)
+      .commit();
+    return result.ok;
+  }
+
+  async rejectJoinRequest(
+    request: JoinRequest,
+    expectedRequestVersionstamp: string,
+    expectedRoomVersionstamp: string,
+  ): Promise<boolean> {
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(request.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.request(request.roomId, request.userId),
+          versionstamp: expectedRequestVersionstamp,
+        },
+        {
+          key: chatKeys.member(request.roomId, request.userId),
+          versionstamp: null,
+        },
+      )
+      .set(chatKeys.request(request.roomId, request.userId), request)
+      .commit();
+    return result.ok;
   }
 
   async setMessage(message: Message): Promise<void> {
