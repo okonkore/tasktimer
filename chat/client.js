@@ -589,6 +589,9 @@ async function loadRoom(roomId) {
     navigate(loginUrl(currentReturnTo()));
     return null;
   }
+  if (result.response.status === 403 && result.body?.access) {
+    return result.body;
+  }
   if (!result.response.ok) {
     throw new Error(apiError(result.body, "ルームを読み込めませんでした。"));
   }
@@ -601,6 +604,10 @@ async function renderRoomPage(roomId) {
     if (!await requireChatUser()) return;
     const result = await loadRoom(roomId);
     if (!result) return;
+    if (result.access) {
+      renderJoinAccess(roomId, result.access);
+      return;
+    }
     renderPanel(`
       <p class="eyebrow">チャットルーム</p><h1 id="chatTitle" data-room-name></h1>
       <p class="lead" data-room-description></p>
@@ -620,9 +627,20 @@ async function renderRoomPage(roomId) {
       settings.textContent = "ルーム設定";
       actions.append(settings);
     }
+    const members = document.createElement("a");
+    members.className = result.isOwner
+      ? "secondary button-link"
+      : "button-link";
+    members.href = `/chat/rooms/${encodeURIComponent(roomId)}/members`;
+    members.textContent = result.isOwner
+      ? "参加申請・メンバー管理"
+      : "メンバー";
+    actions.append(members);
     const placeholder = document.createElement("p");
     placeholder.className = "field-hint";
-    placeholder.textContent = "メッセージと参加申請は次の実装で追加されます。";
+    placeholder.textContent = result.membership.role === "viewer"
+      ? "あなたの権限は閲覧のみです。メッセージ機能は次の実装で追加されます。"
+      : "メッセージ機能は次の実装で追加されます。";
     actions.after(placeholder);
   } catch (requestError) {
     renderNotice(
@@ -630,6 +648,248 @@ async function renderRoomPage(roomId) {
       errorText(requestError),
       '<a class="back-link" href="/chat/">ルーム一覧へ戻る</a>',
     );
+  }
+}
+
+function formatRetryAt(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "24時間後"
+    : date.toLocaleString("ja-JP");
+}
+
+function renderJoinAccess(roomId, access) {
+  const canRequest = access?.canRequest === true;
+  const status = access?.status;
+  let title = "このルームに参加";
+  let message =
+    "参加にはオーナーの承認が必要です。参加申請を送信してください。";
+  if (status === "pending") {
+    title = "承認待ちです";
+    message = "参加申請を送信しました。オーナーの承認をお待ちください。";
+  } else if (status === "rejected" && !canRequest) {
+    title = "参加申請は拒否されました";
+    message = `再申請は ${
+      formatRetryAt(access.rejectedUntil)
+    } 以降にできます。`;
+  } else if (status === "rejected") {
+    title = "再申請できます";
+    message = "もう一度参加申請を送信できます。";
+  } else if (status === "removed") {
+    title = "このルームへの参加が解除されています";
+    message = "再度参加するには、新しい参加申請を送信してください。";
+  }
+  renderPanel(`
+    <p class="eyebrow">チャットルーム</p><h1 id="chatTitle"></h1>
+    <p class="lead" data-join-message></p>
+    <p class="form-error" data-error role="alert" hidden></p>
+    <div class="actions" data-join-actions></div>
+    <a class="back-link" href="/chat/">ルーム一覧へ戻る</a>`);
+  app.querySelector("#chatTitle").textContent = title;
+  app.querySelector("[data-join-message]").textContent = message;
+  const actions = app.querySelector("[data-join-actions]");
+  if (canRequest) {
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.textContent = "参加申請を送信";
+    actions.append(apply);
+    apply.addEventListener("click", async () => {
+      apply.disabled = true;
+      apply.textContent = "送信中…";
+      try {
+        const submitted = await requestJson(
+          `/api/chat/rooms/${encodeURIComponent(roomId)}/requests`,
+          "POST",
+          {},
+          true,
+        );
+        if (!submitted.response.ok) {
+          throw new Error(
+            apiError(submitted.body, "参加申請を送信できませんでした。"),
+          );
+        }
+        await renderRoomPage(roomId);
+      } catch (requestError) {
+        const error = app.querySelector("[data-error]");
+        error.textContent = errorText(requestError);
+        error.hidden = false;
+        apply.disabled = false;
+        apply.textContent = "参加申請を送信";
+      }
+    });
+  }
+  if (status === "pending") {
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "secondary";
+    refresh.textContent = "承認状況を更新";
+    refresh.addEventListener("click", () => void renderRoomPage(roomId));
+    actions.append(refresh);
+  }
+}
+
+function roleLabel(role) {
+  return role === "owner"
+    ? "オーナー"
+    : role === "writer"
+    ? "書き込み可"
+    : "閲覧のみ";
+}
+
+async function renderMembersPage(roomId) {
+  clearRetryTimer();
+  try {
+    if (!await requireChatUser()) return;
+    const roomResult = await loadRoom(roomId);
+    if (!roomResult) return;
+    if (roomResult.access) {
+      navigate(`/chat/rooms/${encodeURIComponent(roomId)}`);
+      return;
+    }
+    renderPanel(`
+      <p class="eyebrow">チャットルーム</p><h1 id="chatTitle">メンバー</h1>
+      <p class="lead" data-members-room></p>
+      <p class="form-error" data-page-error role="alert" hidden></p>
+      <section class="room-section" aria-labelledby="membersTitle">
+        <h2 id="membersTitle">参加メンバー</h2><div class="member-list" data-members></div>
+      </section>
+      ${
+      roomResult.isOwner
+        ? `<section class="room-section" aria-labelledby="requestsTitle"><h2 id="requestsTitle">参加申請</h2><div class="request-list" data-requests></div></section>`
+        : ""
+    }
+      <a class="back-link" href="/chat/rooms/${
+      encodeURIComponent(roomId)
+    }">ルームへ戻る</a>`);
+    app.querySelector("[data-members-room]").textContent = roomResult.room.name;
+    const membersResult = await requestJson(
+      `/api/chat/rooms/${encodeURIComponent(roomId)}/members`,
+      "GET",
+    );
+    if (!membersResult.response.ok) {
+      throw new Error(
+        apiError(membersResult.body, "メンバーを読み込めませんでした。"),
+      );
+    }
+    renderMembers(
+      app.querySelector("[data-members]"),
+      membersResult.body.members,
+    );
+    if (roomResult.isOwner) await loadJoinRequests(roomId);
+  } catch (requestError) {
+    const error = app.querySelector("[data-page-error]");
+    if (error) {
+      error.textContent = errorText(requestError);
+      error.hidden = false;
+    } else {
+      renderNotice(
+        "メンバー",
+        errorText(requestError),
+        '<a class="back-link" href="/chat/">ルーム一覧へ戻る</a>',
+      );
+    }
+  }
+}
+
+function renderMembers(container, members) {
+  container.replaceChildren();
+  if (!Array.isArray(members) || members.length === 0) {
+    container.textContent = "メンバーはいません。";
+    return;
+  }
+  for (const member of members) {
+    const item = document.createElement("div");
+    item.className = "member-card";
+    const name = document.createElement("strong");
+    name.textContent = member.displayName || "名前未設定";
+    const role = document.createElement("span");
+    role.textContent = roleLabel(member.role);
+    item.append(name, role);
+    container.append(item);
+  }
+}
+
+async function loadJoinRequests(roomId) {
+  const container = app.querySelector("[data-requests]");
+  const result = await requestJson(
+    `/api/chat/rooms/${encodeURIComponent(roomId)}/requests`,
+    "GET",
+  );
+  if (!result.response.ok) {
+    throw new Error(apiError(result.body, "参加申請を読み込めませんでした。"));
+  }
+  container.replaceChildren();
+  if (
+    !Array.isArray(result.body.requests) || result.body.requests.length === 0
+  ) {
+    container.textContent = "承認待ちの申請はありません。";
+    return;
+  }
+  for (const request of result.body.requests) {
+    const card = document.createElement("div");
+    card.className = "request-card";
+    const name = document.createElement("strong");
+    name.textContent = request.applicant?.displayName || "名前未設定";
+    const form = document.createElement("form");
+    form.className = "request-actions";
+    const label = document.createElement("label");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "承認する権限");
+    for (
+      const [value, text] of [
+        ["viewer", "閲覧のみ"],
+        ["writer", "書き込み可"],
+      ]
+    ) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      select.append(option);
+    }
+    label.textContent = "承認する権限";
+    label.append(select);
+    const approve = document.createElement("button");
+    approve.type = "submit";
+    approve.textContent = "承認";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "secondary";
+    reject.textContent = "拒否";
+    const error = document.createElement("p");
+    error.className = "form-error";
+    error.hidden = true;
+    form.append(label, approve, reject, error);
+    card.append(name, form);
+    container.append(card);
+    const act = async (action) => {
+      approve.disabled = reject.disabled = true;
+      try {
+        const body = action === "approve" ? { role: select.value } : {};
+        const update = await requestJson(
+          `/api/chat/rooms/${encodeURIComponent(roomId)}/requests/${
+            encodeURIComponent(request.userId)
+          }/${action}`,
+          "POST",
+          body,
+          true,
+        );
+        if (!update.response.ok) {
+          throw new Error(
+            apiError(update.body, "申請を更新できませんでした。"),
+          );
+        }
+        await renderMembersPage(roomId);
+      } catch (requestError) {
+        error.textContent = errorText(requestError);
+        error.hidden = false;
+        approve.disabled = reject.disabled = false;
+      }
+    };
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void act("approve");
+    });
+    reject.addEventListener("click", () => void act("reject"));
   }
 }
 
@@ -760,9 +1020,14 @@ function start() {
     const settingsMatch = path.match(
       /^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})\/settings$/,
     );
+    const membersMatch = path.match(
+      /^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})\/members$/,
+    );
     const roomMatch = path.match(/^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})$/);
     if (settingsMatch) {
       void renderRoomSettings(settingsMatch[1]);
+    } else if (membersMatch) {
+      void renderMembersPage(membersMatch[1]);
     } else if (roomMatch) {
       void renderRoomPage(roomMatch[1]);
     } else {

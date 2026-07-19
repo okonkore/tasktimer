@@ -241,6 +241,45 @@ Deno.test("only the owner can list and review pending requests without exposing 
   });
 });
 
+Deno.test("members can list display names and roles without exposing email", async () => {
+  await withJoinService(async ({ joinHandler, login, createRoom }) => {
+    const owner = await login("owner@example.com");
+    const applicant = await login("applicant@example.com");
+    const outsider = await login("outsider@example.com");
+    const roomId = await createRoom(owner);
+    const requestsPath = `/api/chat/rooms/${roomId}/requests`;
+    const membersPath = `/api/chat/rooms/${roomId}/members`;
+    await joinHandler(mutation(requestsPath, applicant));
+    await joinHandler(mutation(
+      `${requestsPath}/${applicant.userId}/approve`,
+      owner,
+      { role: "viewer" },
+    ));
+
+    const forbidden = await joinHandler(request(membersPath, {
+      headers: { cookie: outsider.cookies },
+    }));
+    assert(forbidden.status === 403, "non-members cannot list members");
+
+    const listed = await joinHandler(request(membersPath, {
+      headers: { cookie: applicant.cookies },
+    }));
+    const body = await listed.json();
+    assert(listed.status === 200, "approved members can list members");
+    assert(body.members.length === 2, "owner and applicant should be listed");
+    assert(
+      body.members.some((member: { userId: string; role: string }) =>
+        member.userId === applicant.userId && member.role === "viewer"
+      ),
+      "the current role should be returned",
+    );
+    assert(
+      !JSON.stringify(body).includes("@example.com"),
+      "member email addresses must remain private",
+    );
+  });
+});
+
 Deno.test("approval requires viewer or writer and atomically records visibleFrom", async () => {
   await withJoinService(async ({
     repository,

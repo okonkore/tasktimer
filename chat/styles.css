@@ -59,7 +59,8 @@ label {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   min-height: 44px;
   padding: 10px 12px;
@@ -75,6 +76,7 @@ textarea {
 
 input:focus-visible,
 textarea:focus-visible,
+select:focus-visible,
 button:focus-visible,
 a:focus-visible {
   outline: 3px solid #5db8b2;
@@ -270,6 +272,49 @@ a {
 
 .share-box input {
   font-size: 13px;
+}
+
+.member-list,
+.request-list {
+  display: grid;
+  gap: 8px;
+}
+
+.member-card,
+.request-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d9dfd5;
+  border-radius: 8px;
+}
+
+.member-card span {
+  color: #52615e;
+  font-size: 14px;
+}
+
+.request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.request-actions label {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 150px;
+}
+
+.request-actions select {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #9facaa;
+  border-radius: 8px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
 }
 
 @media (max-width: 480px) {

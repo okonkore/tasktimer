@@ -99,6 +99,7 @@ Deno.test("chat join request API routes use the configured handler", async () =>
     `/api/chat/rooms/${room}/requests`,
     `/api/chat/rooms/${room}/requests/user-1/approve`,
     `/api/chat/rooms/${room}/requests/user-1/reject`,
+    `/api/chat/rooms/${room}/members`,
   ];
   for (const path of paths) {
     const response = await handleRequest(

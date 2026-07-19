@@ -498,6 +498,20 @@ export class ChatRepository {
     return count;
   }
 
+  async listMembers(
+    roomId: string,
+    limit = chatLimits.maxRoomMembers,
+  ): Promise<Member[]> {
+    const members: Member[] = [];
+    const entries = this.kv.list<Member>(
+      { prefix: ["chat", "members", roomId] },
+      { limit: Math.max(1, Math.floor(limit)) },
+    );
+    for await (const entry of entries) members.push(entry.value);
+    members.sort((left, right) => left.joinedAt.localeCompare(right.joinedAt));
+    return members;
+  }
+
   async setJoinRequest(request: JoinRequest): Promise<void> {
     await this.kv.set(
       chatKeys.request(request.roomId, request.userId),

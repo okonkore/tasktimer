@@ -20,6 +20,9 @@ const requestCollectionPattern = new RegExp(
 const requestActionPattern = new RegExp(
   `^/api/chat/rooms/${roomIdPart}/requests/${userIdPart}/(approve|reject)$`,
 );
+const memberCollectionPattern = new RegExp(
+  `^/api/chat/rooms/${roomIdPart}/members$`,
+);
 
 type Clock = () => Date;
 type JoinRole = Extract<MemberRole, "viewer" | "writer">;
@@ -47,6 +50,20 @@ export class ChatJoinRequestService {
 
   async handle(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
+    const memberMatch = path.match(memberCollectionPattern);
+    if (memberMatch) {
+      if (request.method !== "GET") {
+        return joinJson({ error: "Method not allowed" }, 405, {
+          Allow: "GET",
+        });
+      }
+      const authenticated = await requireChatAuthentication(
+        request,
+        this.#sessions,
+      );
+      if (authenticated instanceof Response) return authenticated;
+      return await this.#listMembers(memberMatch[1], authenticated.user.id);
+    }
     const collectionMatch = path.match(requestCollectionPattern);
     if (collectionMatch) {
       const roomId = collectionMatch[1];
@@ -194,6 +211,29 @@ export class ChatJoinRequestService {
       };
     }))).filter((value) => value !== null);
     return joinJson({ requests });
+  }
+
+  async #listMembers(roomId: string, userId: string): Promise<Response> {
+    const [room, requesterMembership] = await Promise.all([
+      this.#repository.getRoom(roomId),
+      this.#repository.getMember(roomId, userId),
+    ]);
+    if (!room) return joinJson({ error: "Room not found" }, 404);
+    if (!requesterMembership) {
+      return joinJson({ error: "Room membership required" }, 403);
+    }
+    const members = await this.#repository.listMembers(roomId);
+    const publicMembers = (await Promise.all(members.map(async (member) => {
+      const user = await this.#repository.getUser(member.userId);
+      if (!user || user.deletedAt) return null;
+      return {
+        userId: member.userId,
+        displayName: user.displayName ?? "退会したユーザー",
+        role: member.role,
+        joinedAt: member.joinedAt,
+      };
+    }))).filter((member) => member !== null);
+    return joinJson({ members: publicMembers });
   }
 
   async #approve(
