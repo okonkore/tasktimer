@@ -1,5 +1,7 @@
 const storageKey = "read-aloud-task-timer-v2";
 const legacyStorageKey = "read-aloud-task-timer-v1";
+const dirtyStorageKey = "read-aloud-task-timer-v2-dirty";
+const stateEndpoint = "/api/state";
 const announcementThresholds = [1800, 900, 600, 300, 180, 60, 30, 10];
 
 const els = {
@@ -54,9 +56,13 @@ let audioContext = null;
 let draggingTaskId = null;
 let draggingList = null;
 let pointerDrag = null;
+let remoteSyncReady = false;
+let changedWhileLoading = false;
+let remoteSaveTimer = null;
 
 render();
 resetTimerState();
+void synchronizeWithServer();
 
 function loadState() {
   try {
@@ -145,6 +151,91 @@ function makeTimelineTask(stock, seconds) {
 
 function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(state));
+  localStorage.setItem(dirtyStorageKey, "1");
+
+  if (!remoteSyncReady) {
+    changedWhileLoading = true;
+    return;
+  }
+
+  queueRemoteSave();
+}
+
+async function synchronizeWithServer() {
+  const hadPendingLocalState = localStorage.getItem(dirtyStorageKey) === "1";
+  let remoteStateWasMissing = false;
+
+  try {
+    const response = await fetch(stateEndpoint, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`State request failed: ${response.status}`);
+
+    const payload = await response.json();
+    remoteStateWasMissing = payload?.state == null;
+    const remoteState = normalizeRemoteState(payload?.state);
+
+    if (!hadPendingLocalState && !changedWhileLoading && remoteState) {
+      state = remoteState;
+      localStorage.setItem(storageKey, JSON.stringify(state));
+      localStorage.removeItem(dirtyStorageKey);
+      resetTimerState(0);
+    }
+  } catch (error) {
+    console.warn("サーバーからタスクを読み込めませんでした", error);
+  } finally {
+    remoteSyncReady = true;
+  }
+
+  if (
+    remoteStateWasMissing ||
+    hadPendingLocalState ||
+    changedWhileLoading ||
+    localStorage.getItem(dirtyStorageKey) === "1"
+  ) {
+    localStorage.setItem(dirtyStorageKey, "1");
+    await persistStateToServer();
+  }
+}
+
+function normalizeRemoteState(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  if (!Array.isArray(candidate.stocks) || !Array.isArray(candidate.timeline)) return null;
+
+  return {
+    stocks: candidate.stocks.map(normalizeStock).filter(Boolean),
+    timeline: candidate.timeline.map(normalizeTimelineTask).filter(Boolean),
+  };
+}
+
+function queueRemoteSave() {
+  if (remoteSaveTimer) clearTimeout(remoteSaveTimer);
+  remoteSaveTimer = setTimeout(() => {
+    remoteSaveTimer = null;
+    void persistStateToServer();
+  }, 300);
+}
+
+async function persistStateToServer() {
+  const serializedState = JSON.stringify(state);
+
+  try {
+    const response = await fetch(stateEndpoint, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: serializedState,
+    });
+    if (!response.ok) throw new Error(`State save failed: ${response.status}`);
+
+    if (JSON.stringify(state) === serializedState) {
+      localStorage.removeItem(dirtyStorageKey);
+    } else {
+      queueRemoteSave();
+    }
+  } catch (error) {
+    console.warn("タスクをサーバーへ保存できませんでした", error);
+  }
 }
 
 function render() {

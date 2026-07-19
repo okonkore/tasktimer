@@ -1,0 +1,12 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-net --allow-read --unstable-kv server.ts",
+    "check": "deno check --unstable-kv server.ts"
+  },
+  "deploy": {
+    "runtime": {
+      "type": "dynamic",
+      "entrypoint": "server.ts"
+    }
+  }
+}
