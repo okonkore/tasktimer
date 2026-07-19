@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Paradise Timer</title>
-    <link rel="stylesheet" href="./styles.css?v=20260719-file-export" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-export-position" />
   </head>
   <body>
     <main class="app-shell">
@@ -15,6 +15,15 @@
             <h1>Paradise Timer</h1>
             <p>順番に進むタスクタイマー</p>
           </div>
+          <button
+            class="icon-button save-button"
+            id="exportDataBtn"
+            type="button"
+            title="全データをファイルに保存"
+            aria-label="全データをファイルに保存"
+          >
+            保存
+          </button>
         </header>
 
         <section class="now-view" aria-live="polite">
@@ -55,10 +64,7 @@
         <section class="task-section stock-section" aria-label="ストック一覧">
           <div class="section-heading">
             <h2>ストック一覧</h2>
-            <div class="section-heading-actions">
-              <span id="stockCount">0件</span>
-              <button class="small-button" id="exportDataBtn" type="button">ファイルに保存</button>
-            </div>
+            <span id="stockCount">0件</span>
           </div>
           <div class="task-list" id="stockList"></div>
           <p class="empty-state" id="stockEmptyState">+ ボタンからストックを追加できます</p>
