@@ -1,7 +1,9 @@
 const storageKey = "read-aloud-task-timer-v2";
 const legacyStorageKey = "read-aloud-task-timer-v1";
 const dirtyStorageKey = "read-aloud-task-timer-v2-dirty";
-const stateEndpoint = "/api/state";
+const documentIdStorageKey = "read-aloud-task-timer-v2-document-id";
+const documentNameStorageKey = "read-aloud-task-timer-v2-document-name";
+const documentsEndpoint = "/api/documents";
 const announcementThresholds = [1800, 900, 600, 300, 180, 60, 30, 10];
 
 const els = {
@@ -10,7 +12,11 @@ const els = {
   openStock: document.querySelector("#openStockBtn"),
   backToTimer: document.querySelector("#backToTimerBtn"),
   addStock: document.querySelector("#addStockBtn"),
-  exportData: document.querySelector("#exportDataBtn"),
+  newDocument: document.querySelector("#newDocumentBtn"),
+  openDocument: document.querySelector("#openDocumentBtn"),
+  saveDocument: document.querySelector("#saveDocumentBtn"),
+  currentDocumentName: document.querySelector("#currentDocumentName"),
+  documentStatus: document.querySelector("#documentStatus"),
   timerStatus: document.querySelector("#timerStatus"),
   currentTaskName: document.querySelector("#currentTaskName"),
   timeDisplay: document.querySelector("#timeDisplay"),
@@ -41,6 +47,19 @@ const els = {
   cancelStockDialog: document.querySelector("#cancelStockDialogBtn"),
   stockNameInput: document.querySelector("#stockNameInput"),
   stockFormError: document.querySelector("#stockFormError"),
+  documentNameDialog: document.querySelector("#documentNameDialog"),
+  documentNameForm: document.querySelector("#documentNameForm"),
+  documentNameDialogTitle: document.querySelector("#documentNameDialogTitle"),
+  closeDocumentNameDialog: document.querySelector("#closeDocumentNameDialogBtn"),
+  cancelDocumentName: document.querySelector("#cancelDocumentNameBtn"),
+  confirmDocumentName: document.querySelector("#confirmDocumentNameBtn"),
+  documentNameInput: document.querySelector("#documentNameInput"),
+  documentNameError: document.querySelector("#documentNameError"),
+  openDocumentDialog: document.querySelector("#openDocumentDialog"),
+  closeOpenDocumentDialog: document.querySelector("#closeOpenDocumentDialogBtn"),
+  documentList: document.querySelector("#documentList"),
+  documentListEmpty: document.querySelector("#documentListEmpty"),
+  documentListError: document.querySelector("#documentListError"),
 };
 
 let state = loadState();
@@ -57,13 +76,14 @@ let audioContext = null;
 let draggingTaskId = null;
 let draggingList = null;
 let pointerDrag = null;
-let remoteSyncReady = false;
-let changedWhileLoading = false;
-let remoteSaveTimer = null;
+let currentDocumentId = localStorage.getItem(documentIdStorageKey) || null;
+let currentDocumentName = localStorage.getItem(documentNameStorageKey) || "無題";
+let documentDirty = localStorage.getItem(dirtyStorageKey) === "1" || !currentDocumentId;
+let documentNameMode = "new";
 
 render();
 resetTimerState();
-void synchronizeWithServer();
+updateDocumentHeader();
 
 function loadState() {
   try {
@@ -153,51 +173,13 @@ function makeTimelineTask(stock, seconds) {
 function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(state));
   localStorage.setItem(dirtyStorageKey, "1");
-
-  if (!remoteSyncReady) {
-    changedWhileLoading = true;
-    return;
-  }
-
-  queueRemoteSave();
+  documentDirty = true;
+  updateDocumentHeader();
 }
 
-async function synchronizeWithServer() {
-  const hadPendingLocalState = localStorage.getItem(dirtyStorageKey) === "1";
-  let remoteStateWasMissing = false;
-
-  try {
-    const response = await fetch(stateEndpoint, {
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error(`State request failed: ${response.status}`);
-
-    const payload = await response.json();
-    remoteStateWasMissing = payload?.state == null;
-    const remoteState = normalizeRemoteState(payload?.state);
-
-    if (!hadPendingLocalState && !changedWhileLoading && remoteState) {
-      state = remoteState;
-      localStorage.setItem(storageKey, JSON.stringify(state));
-      localStorage.removeItem(dirtyStorageKey);
-      resetTimerState(0);
-    }
-  } catch (error) {
-    console.warn("サーバーからタスクを読み込めませんでした", error);
-  } finally {
-    remoteSyncReady = true;
-  }
-
-  if (
-    remoteStateWasMissing ||
-    hadPendingLocalState ||
-    changedWhileLoading ||
-    localStorage.getItem(dirtyStorageKey) === "1"
-  ) {
-    localStorage.setItem(dirtyStorageKey, "1");
-    await persistStateToServer();
-  }
+function updateDocumentHeader(message = "") {
+  els.currentDocumentName.textContent = currentDocumentName;
+  els.documentStatus.textContent = message || (documentDirty ? "未保存" : "保存済み");
 }
 
 function normalizeRemoteState(candidate) {
@@ -210,52 +192,166 @@ function normalizeRemoteState(candidate) {
   };
 }
 
-function queueRemoteSave() {
-  if (remoteSaveTimer) clearTimeout(remoteSaveTimer);
-  remoteSaveTimer = setTimeout(() => {
-    remoteSaveTimer = null;
-    void persistStateToServer();
-  }, 300);
+function openDocumentNameDialog(mode) {
+  if (mode === "new" && documentDirty && !confirm("未保存の変更があります。新規作成しますか？")) return;
+
+  documentNameMode = mode;
+  els.documentNameDialogTitle.textContent = mode === "new" ? "新規作成" : "名前を付けて保存";
+  els.confirmDocumentName.textContent = mode === "new" ? "作成" : "保存";
+  els.documentNameInput.value = mode === "new" ? "無題" : currentDocumentName;
+  els.documentNameError.textContent = "";
+  showDialog(els.documentNameDialog);
+  setTimeout(() => els.documentNameInput.select(), 0);
 }
 
-async function persistStateToServer() {
+function closeDocumentNameDialog() {
+  closeDialog(els.documentNameDialog);
+}
+
+async function submitDocumentName(event) {
+  event.preventDefault();
+  const name = els.documentNameInput.value.trim();
+  if (!name) {
+    els.documentNameError.textContent = "ファイル名を入力してください";
+    return;
+  }
+
+  if (documentNameMode === "new") {
+    currentDocumentId = null;
+    currentDocumentName = name.slice(0, 80);
+    state = { stocks: [], timeline: [] };
+    documentDirty = true;
+    localStorage.removeItem(documentIdStorageKey);
+    localStorage.setItem(documentNameStorageKey, currentDocumentName);
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.setItem(dirtyStorageKey, "1");
+    closeDocumentNameDialog();
+    showTimerView();
+    resetTimerState(0);
+    updateDocumentHeader();
+    return;
+  }
+
+  await persistCurrentDocument(name.slice(0, 80), true);
+  if (!documentDirty) closeDocumentNameDialog();
+}
+
+async function saveCurrentDocument() {
+  if (!currentDocumentId) {
+    openDocumentNameDialog("save");
+    return;
+  }
+  await persistCurrentDocument(currentDocumentName, false);
+}
+
+async function persistCurrentDocument(name, create) {
   const serializedState = JSON.stringify(state);
+  els.saveDocument.disabled = true;
+  updateDocumentHeader("保存中…");
 
   try {
-    const response = await fetch(stateEndpoint, {
-      method: "PUT",
+    const response = await fetch(create ? documentsEndpoint : `${documentsEndpoint}/${currentDocumentId}`, {
+      method: create ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: serializedState,
+      body: JSON.stringify({ name, state }),
     });
-    if (!response.ok) throw new Error(`State save failed: ${response.status}`);
+    if (!response.ok) throw new Error(`Document save failed: ${response.status}`);
+    const payload = await response.json();
+    if (!payload?.document?.id) throw new Error("Invalid save response");
 
+    currentDocumentId = payload.document.id;
+    currentDocumentName = payload.document.name;
+    localStorage.setItem(documentIdStorageKey, currentDocumentId);
+    localStorage.setItem(documentNameStorageKey, currentDocumentName);
     if (JSON.stringify(state) === serializedState) {
+      documentDirty = false;
       localStorage.removeItem(dirtyStorageKey);
     } else {
-      queueRemoteSave();
+      documentDirty = true;
+      localStorage.setItem(dirtyStorageKey, "1");
     }
+    updateDocumentHeader();
   } catch (error) {
-    console.warn("タスクをサーバーへ保存できませんでした", error);
+    console.warn("ファイルをサーバーへ保存できませんでした", error);
+    els.documentNameError.textContent = create ? "保存できませんでした。もう一度お試しください" : "";
+    updateDocumentHeader("保存に失敗しました");
+  } finally {
+    els.saveDocument.disabled = false;
   }
 }
 
-function exportDataFile() {
-  const backup = {
-    format: "paradise-timer-backup",
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    state,
-  };
-  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  const date = new Date().toLocaleDateString("sv-SE");
-  link.href = url;
-  link.download = `paradise-timer-${date}.json`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+async function showOpenDocumentDialog() {
+  els.documentList.innerHTML = "";
+  els.documentListEmpty.hidden = true;
+  els.documentListError.textContent = "読み込み中…";
+  showDialog(els.openDocumentDialog);
+
+  try {
+    const response = await fetch(documentsEndpoint, { headers: { Accept: "application/json" }, cache: "no-store" });
+    if (!response.ok) throw new Error(`Document list failed: ${response.status}`);
+    const payload = await response.json();
+    const documents = Array.isArray(payload?.documents) ? payload.documents : [];
+    els.documentListError.textContent = "";
+    els.documentListEmpty.hidden = documents.length > 0;
+    documents.forEach(renderDocumentListItem);
+  } catch (error) {
+    console.warn("ファイル一覧を読み込めませんでした", error);
+    els.documentListError.textContent = "ファイル一覧を読み込めませんでした";
+  }
+}
+
+function renderDocumentListItem(savedDocument) {
+  const item = document.createElement("article");
+  item.className = "document-list-item";
+
+  const main = document.createElement("div");
+  main.className = "document-list-main";
+  const name = document.createElement("strong");
+  name.textContent = String(savedDocument.name || "無題");
+  const updated = document.createElement("small");
+  const updatedAt = new Date(savedDocument.updatedAt);
+  updated.textContent = Number.isNaN(updatedAt.getTime()) ? "" : updatedAt.toLocaleString("ja-JP");
+  main.append(name, updated);
+
+  const open = document.createElement("button");
+  open.className = "small-button";
+  open.type = "button";
+  open.textContent = "開く";
+  open.addEventListener("click", () => void loadDocument(savedDocument.id));
+  item.append(main, open);
+  els.documentList.append(item);
+}
+
+async function loadDocument(id) {
+  if (documentDirty && !confirm("未保存の変更があります。別のファイルを開きますか？")) return;
+  els.documentListError.textContent = "読み込み中…";
+
+  try {
+    const response = await fetch(`${documentsEndpoint}/${encodeURIComponent(id)}`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Document load failed: ${response.status}`);
+    const payload = await response.json();
+    const loadedState = normalizeRemoteState(payload?.document?.state);
+    if (!loadedState || !payload?.document?.id) throw new Error("Invalid document response");
+
+    state = loadedState;
+    currentDocumentId = payload.document.id;
+    currentDocumentName = String(payload.document.name || "無題");
+    documentDirty = false;
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.setItem(documentIdStorageKey, currentDocumentId);
+    localStorage.setItem(documentNameStorageKey, currentDocumentName);
+    localStorage.removeItem(dirtyStorageKey);
+    closeDialog(els.openDocumentDialog);
+    showTimerView();
+    resetTimerState(0);
+    updateDocumentHeader();
+  } catch (error) {
+    console.warn("ファイルを開けませんでした", error);
+    els.documentListError.textContent = "ファイルを開けませんでした";
+  }
 }
 
 function render() {
@@ -853,7 +949,9 @@ function clampInteger(value, min, max) {
 els.openStock.addEventListener("click", showStockView);
 els.backToTimer.addEventListener("click", showTimerView);
 els.addStock.addEventListener("click", () => openStockDialog());
-els.exportData.addEventListener("click", exportDataFile);
+els.newDocument.addEventListener("click", () => openDocumentNameDialog("new"));
+els.openDocument.addEventListener("click", () => void showOpenDocumentDialog());
+els.saveDocument.addEventListener("click", () => void saveCurrentDocument());
 els.startPause.addEventListener("click", startOrPause);
 els.reset.addEventListener("click", () => resetTimerState(0));
 els.next.addEventListener("click", skipToNext);
@@ -863,8 +961,12 @@ els.cancelTimeDialog.addEventListener("click", closeTimeDialog);
 els.stockForm.addEventListener("submit", submitStock);
 els.closeStockDialog.addEventListener("click", closeStockDialog);
 els.cancelStockDialog.addEventListener("click", closeStockDialog);
+els.documentNameForm.addEventListener("submit", (event) => void submitDocumentName(event));
+els.closeDocumentNameDialog.addEventListener("click", closeDocumentNameDialog);
+els.cancelDocumentName.addEventListener("click", closeDocumentNameDialog);
+els.closeOpenDocumentDialog.addEventListener("click", () => closeDialog(els.openDocumentDialog));
 
-[els.timeDialog, els.stockDialog].forEach((dialog) => {
+[els.timeDialog, els.stockDialog, els.documentNameDialog, els.openDocumentDialog].forEach((dialog) => {
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) closeDialog(dialog);
   });

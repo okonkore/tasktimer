@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Paradise Timer</title>
-    <link rel="stylesheet" href="./styles.css?v=20260719-export-position" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-documents" />
   </head>
   <body>
     <main class="app-shell">
@@ -15,16 +15,20 @@
             <h1>Paradise Timer</h1>
             <p>順番に進むタスクタイマー</p>
           </div>
-          <button
-            class="icon-button save-button"
-            id="exportDataBtn"
-            type="button"
-            title="全データをファイルに保存"
-            aria-label="全データをファイルに保存"
-          >
-            保存
-          </button>
         </header>
+
+        <div class="file-toolbar" role="toolbar" aria-label="タイマーファイル操作">
+          <div class="file-current">
+            <span>現在のファイル</span>
+            <strong id="currentDocumentName">無題</strong>
+            <small id="documentStatus">未保存</small>
+          </div>
+          <div class="file-actions">
+            <button class="small-button" id="newDocumentBtn" type="button">新規作成</button>
+            <button class="small-button" id="openDocumentBtn" type="button">開く</button>
+            <button class="small-button file-save-button" id="saveDocumentBtn" type="button">保存</button>
+          </div>
+        </div>
 
         <section class="now-view" aria-live="polite">
           <p class="status-label" id="timerStatus">待機中</p>
@@ -122,6 +126,39 @@
       </form>
     </dialog>
 
-    <script src="./client.js?v=20260719-file-export"></script>
+    <dialog class="task-dialog" id="documentNameDialog">
+      <form method="dialog" id="documentNameForm">
+        <div class="dialog-header">
+          <h2 id="documentNameDialogTitle">新規作成</h2>
+          <button class="icon-button" id="closeDocumentNameDialogBtn" type="button" aria-label="閉じる">×</button>
+        </div>
+
+        <label class="field">
+          <span>ファイル名</span>
+          <input id="documentNameInput" type="text" maxlength="80" autocomplete="off" required />
+        </label>
+
+        <p class="form-error" id="documentNameError" role="alert"></p>
+
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancelDocumentNameBtn" type="button">キャンセル</button>
+          <button class="primary-button" id="confirmDocumentNameBtn" type="submit">作成</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="task-dialog" id="openDocumentDialog">
+      <div class="dialog-body">
+        <div class="dialog-header">
+          <h2>ファイルを開く</h2>
+          <button class="icon-button" id="closeOpenDocumentDialogBtn" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div class="document-list" id="documentList"></div>
+        <p class="empty-state" id="documentListEmpty" hidden>保存されたファイルはありません</p>
+        <p class="form-error" id="documentListError" role="alert"></p>
+      </div>
+    </dialog>
+
+    <script src="./client.js?v=20260719-documents"></script>
   </body>
 </html>

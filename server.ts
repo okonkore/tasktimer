@@ -1,6 +1,12 @@
 const kv = await Deno.openKv();
 
 const stateKey: Deno.KvKey = ["tasktimer", "state"];
+const documentPrefix: Deno.KvKey = ["tasktimer", "documents"];
+const legacyMigrationKey: Deno.KvKey = [
+  "tasktimer",
+  "migrations",
+  "legacy-state-v1",
+];
 const maxRequestBytes = 64 * 1024;
 
 const staticFiles = new Map<string, { path: string; contentType: string }>([
@@ -26,8 +32,27 @@ type AppState = {
   >;
 };
 
+type TimerDocument = {
+  id: string;
+  name: string;
+  state: AppState;
+  createdAt: string;
+  updatedAt: string;
+};
+
 Deno.serve(async (request) => {
   const url = new URL(request.url);
+
+  if (url.pathname === "/api/documents") {
+    return handleDocumentCollectionRequest(request);
+  }
+
+  const documentMatch = url.pathname.match(
+    /^\/api\/documents\/([a-zA-Z0-9_-]{1,100})$/,
+  );
+  if (documentMatch) {
+    return handleDocumentRequest(request, documentMatch[1]);
+  }
 
   if (url.pathname === "/api/state") {
     return handleStateRequest(request);
@@ -59,6 +84,150 @@ Deno.serve(async (request) => {
   }
 });
 
+async function handleDocumentCollectionRequest(
+  request: Request,
+): Promise<Response> {
+  if (request.method === "GET") {
+    await migrateLegacyState();
+    const documents: Array<Pick<TimerDocument, "id" | "name" | "updatedAt">> =
+      [];
+    for await (
+      const entry of kv.list<TimerDocument>({ prefix: documentPrefix })
+    ) {
+      const document = entry.value;
+      if (!document?.id || !document?.name || !document?.updatedAt) continue;
+      documents.push({
+        id: document.id,
+        name: document.name,
+        updatedAt: document.updatedAt,
+      });
+    }
+    documents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return jsonResponse({ documents }, 200, { "cache-control": "no-store" });
+  }
+
+  if (request.method === "POST") {
+    const input = await readDocumentInput(request);
+    if (input instanceof Response) return input;
+
+    const now = new Date().toISOString();
+    const document: TimerDocument = {
+      id: crypto.randomUUID(),
+      name: input.name,
+      state: input.state,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await kv.set([...documentPrefix, document.id], document);
+    return jsonResponse({ document }, 201);
+  }
+
+  return jsonResponse({ error: "Method not allowed" }, 405, {
+    Allow: "GET, POST",
+  });
+}
+
+async function handleDocumentRequest(
+  request: Request,
+  id: string,
+): Promise<Response> {
+  const key: Deno.KvKey = [...documentPrefix, id];
+
+  if (request.method === "GET") {
+    const entry = await kv.get<TimerDocument>(key);
+    if (!entry.value) return jsonResponse({ error: "Document not found" }, 404);
+    return jsonResponse({ document: entry.value }, 200, {
+      "cache-control": "no-store",
+    });
+  }
+
+  if (request.method === "PUT") {
+    const existing = await kv.get<TimerDocument>(key);
+    if (!existing.value) {
+      return jsonResponse({ error: "Document not found" }, 404);
+    }
+
+    const input = await readDocumentInput(request);
+    if (input instanceof Response) return input;
+
+    const document: TimerDocument = {
+      ...existing.value,
+      name: input.name,
+      state: input.state,
+      updatedAt: new Date().toISOString(),
+    };
+    await kv.set(key, document);
+    return jsonResponse({ document });
+  }
+
+  return jsonResponse({ error: "Method not allowed" }, 405, {
+    Allow: "GET, PUT",
+  });
+}
+
+async function readDocumentInput(
+  request: Request,
+): Promise<{ name: string; state: AppState } | Response> {
+  const parsed = await readJsonBody(request);
+  if (parsed instanceof Response) return parsed;
+  if (!parsed || typeof parsed !== "object") {
+    return jsonResponse({ error: "Invalid document" }, 400);
+  }
+
+  const candidate = parsed as Record<string, unknown>;
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+  const state = normalizeState(candidate.state);
+  if (!name || name.length > 80 || !state) {
+    return jsonResponse({ error: "Invalid document" }, 400);
+  }
+  return { name, state };
+}
+
+async function readJsonBody(request: Request): Promise<unknown | Response> {
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (declaredLength > maxRequestBytes) {
+    return jsonResponse({ error: "Request body is too large" }, 413);
+  }
+
+  let bodyText: string;
+  try {
+    bodyText = await request.text();
+  } catch {
+    return jsonResponse({ error: "Could not read request body" }, 400);
+  }
+
+  if (new TextEncoder().encode(bodyText).byteLength > maxRequestBytes) {
+    return jsonResponse({ error: "Request body is too large" }, 413);
+  }
+
+  try {
+    return JSON.parse(bodyText);
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+}
+
+async function migrateLegacyState(): Promise<void> {
+  const migration = await kv.get(legacyMigrationKey);
+  if (migration.value) return;
+
+  const legacy = await kv.get<AppState>(stateKey);
+  const state = normalizeState(legacy.value);
+  const mutations = kv.atomic().check(migration).set(legacyMigrationKey, true);
+  if (state) {
+    const now = new Date().toISOString();
+    const document: TimerDocument = {
+      id: "legacy-state",
+      name: "以前のタイマー",
+      state,
+      createdAt: now,
+      updatedAt: now,
+    };
+    mutations.set([...documentPrefix, document.id], document);
+  }
+  await mutations.commit();
+}
+
 async function handleStateRequest(request: Request): Promise<Response> {
   if (request.method === "GET") {
     const entry = await kv.get<AppState>(stateKey);
@@ -68,28 +237,8 @@ async function handleStateRequest(request: Request): Promise<Response> {
   }
 
   if (request.method === "PUT") {
-    const declaredLength = Number(request.headers.get("content-length") || 0);
-    if (declaredLength > maxRequestBytes) {
-      return jsonResponse({ error: "Request body is too large" }, 413);
-    }
-
-    let bodyText: string;
-    try {
-      bodyText = await request.text();
-    } catch {
-      return jsonResponse({ error: "Could not read request body" }, 400);
-    }
-
-    if (new TextEncoder().encode(bodyText).byteLength > maxRequestBytes) {
-      return jsonResponse({ error: "Request body is too large" }, 413);
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bodyText);
-    } catch {
-      return jsonResponse({ error: "Invalid JSON" }, 400);
-    }
+    const parsed = await readJsonBody(request);
+    if (parsed instanceof Response) return parsed;
 
     const state = normalizeState(parsed);
     if (!state) return jsonResponse({ error: "Invalid task state" }, 400);
