@@ -1,8 +1,8 @@
 {
   "tasks": {
     "dev": "deno run --allow-env --allow-net --allow-read --unstable-kv server.ts",
-    "check": "deno check --unstable-kv server.ts server_test.ts chat/data.ts chat/data_test.ts chat/auth.ts chat/auth_test.ts chat/session.ts chat/session_test.ts chat/client.js",
-    "test": "deno test --allow-read --unstable-kv server_test.ts chat/data_test.ts chat/auth_test.ts chat/session_test.ts"
+    "check": "deno check --unstable-kv server.ts server_test.ts chat/data.ts chat/data_test.ts chat/auth.ts chat/auth_test.ts chat/session.ts chat/session_test.ts chat/rooms.ts chat/rooms_test.ts chat/client.js",
+    "test": "deno test --allow-read --unstable-kv server_test.ts chat/data_test.ts chat/auth_test.ts chat/session_test.ts chat/rooms_test.ts"
   },
   "deploy": {
     "runtime": {

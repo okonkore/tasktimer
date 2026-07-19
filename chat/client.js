@@ -72,6 +72,21 @@ async function postJson(path, body, includeCsrf = false) {
   return { response, body: await response.json().catch(() => null) };
 }
 
+async function requestJson(path, method, body, includeCsrf = false) {
+  const headers = { "content-type": "application/json" };
+  if (includeCsrf) {
+    const csrfToken = readCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
+  }
+  const response = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return { response, body: await response.json().catch(() => null) };
+}
+
 function renderPanel(content) {
   app.innerHTML = `
     <section class="chat-panel" aria-labelledby="chatTitle">
@@ -379,32 +394,321 @@ async function renderChatHome() {
       navigate("/chat/profile?setup=1&returnTo=%2Fchat%2F");
       return;
     }
-    renderNotice(
-      "チャット",
-      "ログイン済みです。ルーム一覧は次の実装で追加されます。",
-      '<a class="button-link" href="/chat/profile">プロフィール</a><button class="text-button" type="button" data-logout>ログアウト</button><a class="back-link" href="/">タイマーへ戻る</a>',
-    );
-    const logout = app.querySelector("[data-logout]");
-    logout.addEventListener("click", async () => {
-      logout.disabled = true;
-      try {
-        const result = await postJson("/api/chat/auth/logout", {}, true);
-        if (!result.response.ok) {
-          throw new Error(
-            apiError(result.body, "ログアウトできませんでした。"),
-          );
-        }
-        navigate("/chat/");
-      } catch (requestError) {
-        logout.disabled = false;
-        globalThis.alert(errorText(requestError));
-      }
-    });
+    await renderDashboard();
   } catch (requestError) {
     renderNotice(
       "チャット",
       errorText(requestError),
       `<a href="${loginUrl("/chat/")}">ログイン</a>`,
+    );
+  }
+}
+
+async function requireChatUser() {
+  const current = await getCurrentUser();
+  if (!current) {
+    navigate(loginUrl(currentReturnTo()));
+    return null;
+  }
+  if (current.needsProfile) {
+    navigate(
+      `/chat/profile?setup=1&returnTo=${encodeURIComponent(currentReturnTo())}`,
+    );
+    return null;
+  }
+  return current;
+}
+
+function addDashboardActions() {
+  const logout = app.querySelector("[data-logout]");
+  logout.addEventListener("click", async () => {
+    logout.disabled = true;
+    try {
+      const result = await postJson("/api/chat/auth/logout", {}, true);
+      if (!result.response.ok) {
+        throw new Error(apiError(result.body, "ログアウトできませんでした。"));
+      }
+      navigate("/chat/");
+    } catch (requestError) {
+      logout.disabled = false;
+      globalThis.alert(errorText(requestError));
+    }
+  });
+}
+
+async function renderDashboard() {
+  renderPanel(`
+    <div class="panel-heading">
+      <div><p class="eyebrow">Paradise Timer</p><h1 id="chatTitle">チャット</h1></div>
+      <a class="secondary-link" href="/chat/profile">プロフィール</a>
+    </div>
+    <div class="dashboard-actions">
+      <a class="button-link" href="/chat/rooms/new">ルームを作成</a>
+      <button class="text-button" type="button" data-logout>ログアウト</button>
+    </div>
+    <section class="room-section" aria-labelledby="ownedRoomsTitle">
+      <h2 id="ownedRoomsTitle">所有ルーム</h2><div data-owned-rooms class="room-list"></div>
+    </section>
+    <section class="room-section" aria-labelledby="joinedRoomsTitle">
+      <h2 id="joinedRoomsTitle">参加ルーム</h2><div data-joined-rooms class="room-list"></div>
+    </section>
+    <a class="back-link" href="/">タイマーへ戻る</a>`);
+  addDashboardActions();
+  try {
+    const result = await requestJson("/api/chat/rooms", "GET");
+    if (result.response.status === 401) {
+      navigate(loginUrl("/chat/"));
+      return;
+    }
+    if (!result.response.ok) {
+      throw new Error(apiError(result.body, "ルームを読み込めませんでした。"));
+    }
+    renderRoomList(
+      app.querySelector("[data-owned-rooms]"),
+      result.body.ownedRooms,
+      "所有しているルームはありません。",
+    );
+    renderRoomList(
+      app.querySelector("[data-joined-rooms]"),
+      result.body.joinedRooms,
+      "参加しているルームはありません。",
+    );
+  } catch (requestError) {
+    renderNotice(
+      "チャット",
+      errorText(requestError),
+      '<a class="back-link" href="/">タイマーへ戻る</a>',
+    );
+  }
+}
+
+function renderRoomList(container, rooms, emptyMessage) {
+  container.replaceChildren();
+  if (!Array.isArray(rooms) || rooms.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-rooms";
+    empty.textContent = emptyMessage;
+    container.append(empty);
+    return;
+  }
+  for (const room of rooms) {
+    if (!room || typeof room.id !== "string" || typeof room.name !== "string") {
+      continue;
+    }
+    const link = document.createElement("a");
+    link.className = "room-card";
+    link.href = `/chat/rooms/${encodeURIComponent(room.id)}`;
+    const name = document.createElement("strong");
+    name.textContent = room.name;
+    const description = document.createElement("span");
+    description.textContent =
+      typeof room.description === "string" && room.description
+        ? room.description
+        : "説明はありません";
+    const role = document.createElement("small");
+    role.textContent = room.role === "owner"
+      ? "オーナー"
+      : room.role === "writer"
+      ? "書き込み可"
+      : "閲覧のみ";
+    link.append(name, description, role);
+    container.append(link);
+  }
+}
+
+async function renderRoomCreate() {
+  clearRetryTimer();
+  try {
+    if (!await requireChatUser()) return;
+    renderPanel(`
+      <p class="eyebrow">チャット</p><h1 id="chatTitle">ルームを作成</h1>
+      <p class="lead">共有URLを使って、ほかのユーザーが参加申請できるルームを作成します。</p>
+      <form class="stack" data-room-form novalidate>
+        <label for="roomName">ルーム名</label>
+        <input id="roomName" name="roomName" type="text" required maxlength="50" autocomplete="off" />
+        <label for="roomDescription">説明 <span class="optional">任意</span></label>
+        <textarea id="roomDescription" name="roomDescription" maxlength="200" rows="4"></textarea>
+        <p class="field-hint">ルーム名は1〜50文字、説明は200文字までです。</p>
+        <p class="form-error" data-error role="alert" hidden></p>
+        <button type="submit">ルームを作成</button>
+      </form>
+      <a class="back-link" href="/chat/">チャットへ戻る</a>`);
+    const form = app.querySelector("[data-room-form]");
+    const error = form.querySelector("[data-error]");
+    const button = form.querySelector("button");
+    form.elements.roomName.focus();
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = form.elements.roomName.value.trim();
+      const description = form.elements.roomDescription.value.trim();
+      if (!name || name.length > 50 || description.length > 200) {
+        error.textContent =
+          "ルーム名は1〜50文字、説明は200文字までで入力してください。";
+        error.hidden = false;
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "作成中…";
+      try {
+        const result = await requestJson("/api/chat/rooms", "POST", {
+          name,
+          description,
+        }, true);
+        if (result.response.status === 401) {
+          navigate(loginUrl(currentReturnTo()));
+          return;
+        }
+        if (!result.response.ok) {
+          throw new Error(
+            apiError(result.body, "ルームを作成できませんでした。"),
+          );
+        }
+        navigate(`/chat/rooms/${encodeURIComponent(result.body.room.id)}`);
+      } catch (requestError) {
+        error.textContent = errorText(requestError);
+        error.hidden = false;
+        button.disabled = false;
+        button.textContent = "ルームを作成";
+      }
+    });
+  } catch (requestError) {
+    renderNotice(
+      "ルームを作成",
+      errorText(requestError),
+      '<a class="back-link" href="/chat/">チャットへ戻る</a>',
+    );
+  }
+}
+
+async function loadRoom(roomId) {
+  const result = await requestJson(
+    `/api/chat/rooms/${encodeURIComponent(roomId)}`,
+    "GET",
+  );
+  if (result.response.status === 401) {
+    navigate(loginUrl(currentReturnTo()));
+    return null;
+  }
+  if (!result.response.ok) {
+    throw new Error(apiError(result.body, "ルームを読み込めませんでした。"));
+  }
+  return result.body;
+}
+
+async function renderRoomPage(roomId) {
+  clearRetryTimer();
+  try {
+    if (!await requireChatUser()) return;
+    const result = await loadRoom(roomId);
+    if (!result) return;
+    renderPanel(`
+      <p class="eyebrow">チャットルーム</p><h1 id="chatTitle" data-room-name></h1>
+      <p class="lead" data-room-description></p>
+      <div class="share-box"><label for="shareUrl">共有URL</label><input id="shareUrl" type="text" readonly /></div>
+      <div class="actions" data-room-actions></div>
+      <a class="back-link" href="/chat/">ルーム一覧へ戻る</a>`);
+    app.querySelector("[data-room-name]").textContent = result.room.name;
+    app.querySelector("[data-room-description]").textContent =
+      result.room.description || "説明はありません。";
+    app.querySelector("#shareUrl").value =
+      `${apiOrigin}/chat/rooms/${result.room.id}`;
+    const actions = app.querySelector("[data-room-actions]");
+    if (result.isOwner) {
+      const settings = document.createElement("a");
+      settings.className = "button-link";
+      settings.href = `/chat/rooms/${encodeURIComponent(roomId)}/settings`;
+      settings.textContent = "ルーム設定";
+      actions.append(settings);
+    }
+    const placeholder = document.createElement("p");
+    placeholder.className = "field-hint";
+    placeholder.textContent = "メッセージと参加申請は次の実装で追加されます。";
+    actions.after(placeholder);
+  } catch (requestError) {
+    renderNotice(
+      "ルーム",
+      errorText(requestError),
+      '<a class="back-link" href="/chat/">ルーム一覧へ戻る</a>',
+    );
+  }
+}
+
+async function renderRoomSettings(roomId) {
+  clearRetryTimer();
+  try {
+    if (!await requireChatUser()) return;
+    const result = await loadRoom(roomId);
+    if (!result) return;
+    if (!result.isOwner) {
+      renderNotice(
+        "ルーム設定",
+        "このルームを変更できるのはオーナーだけです。",
+        `<a class="back-link" href="/chat/rooms/${
+          encodeURIComponent(roomId)
+        }">ルームへ戻る</a>`,
+      );
+      return;
+    }
+    renderPanel(`
+      <p class="eyebrow">チャットルーム</p><h1 id="chatTitle">ルーム設定</h1>
+      <form class="stack" data-room-settings novalidate>
+        <label for="roomName">ルーム名</label>
+        <input id="roomName" name="roomName" type="text" required maxlength="50" autocomplete="off" />
+        <label for="roomDescription">説明 <span class="optional">任意</span></label>
+        <textarea id="roomDescription" name="roomDescription" maxlength="200" rows="4"></textarea>
+        <p class="form-error" data-error role="alert" hidden></p><p class="form-success" data-success role="status" hidden></p>
+        <button type="submit">変更を保存</button>
+      </form>
+      <a class="back-link" href="/chat/rooms/${
+      encodeURIComponent(roomId)
+    }">ルームへ戻る</a>`);
+    const form = app.querySelector("[data-room-settings]");
+    form.elements.roomName.value = result.room.name;
+    form.elements.roomDescription.value = result.room.description;
+    const error = form.querySelector("[data-error]");
+    const success = form.querySelector("[data-success]");
+    const button = form.querySelector("button");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = form.elements.roomName.value.trim();
+      const description = form.elements.roomDescription.value.trim();
+      if (!name || name.length > 50 || description.length > 200) {
+        error.textContent =
+          "ルーム名は1〜50文字、説明は200文字までで入力してください。";
+        error.hidden = false;
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "保存中…";
+      try {
+        const update = await requestJson(
+          `/api/chat/rooms/${encodeURIComponent(roomId)}`,
+          "PATCH",
+          { name, description },
+          true,
+        );
+        if (!update.response.ok) {
+          throw new Error(
+            apiError(update.body, "ルームを更新できませんでした。"),
+          );
+        }
+        form.elements.roomName.value = update.body.room.name;
+        form.elements.roomDescription.value = update.body.room.description;
+        success.textContent = "変更を保存しました。";
+        success.hidden = false;
+      } catch (requestError) {
+        error.textContent = errorText(requestError);
+        error.hidden = false;
+      } finally {
+        button.disabled = false;
+        button.textContent = "変更を保存";
+      }
+    });
+  } catch (requestError) {
+    renderNotice(
+      "ルーム設定",
+      errorText(requestError),
+      '<a class="back-link" href="/chat/">ルーム一覧へ戻る</a>',
     );
   }
 }
@@ -450,8 +754,20 @@ function start() {
     void renderProfile();
   } else if (path === "/chat") {
     void renderChatHome();
+  } else if (path === "/chat/rooms/new") {
+    void renderRoomCreate();
   } else {
-    void renderProtectedPlaceholder();
+    const settingsMatch = path.match(
+      /^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})\/settings$/,
+    );
+    const roomMatch = path.match(/^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})$/);
+    if (settingsMatch) {
+      void renderRoomSettings(settingsMatch[1]);
+    } else if (roomMatch) {
+      void renderRoomPage(roomMatch[1]);
+    } else {
+      void renderProtectedPlaceholder();
+    }
   }
 }
 

@@ -8,6 +8,7 @@ import {
   ChatSessionService,
   createSessionAuthHandler,
 } from "./chat/session.ts";
+import { ChatRoomService, createChatRoomHandler } from "./chat/rooms.ts";
 
 const kv = await Deno.openKv();
 
@@ -61,6 +62,7 @@ type TimerDocument = {
 
 export interface RequestDependencies {
   chatAuthHandler?: (request: Request) => Promise<Response>;
+  chatRoomHandler?: (request: Request) => Promise<Response>;
 }
 
 export async function handleRequest(
@@ -87,6 +89,15 @@ export async function handleRequest(
     url.pathname === "/api/chat/me"
   ) {
     return await (dependencies.chatAuthHandler ?? handleProductionChatAuth)(
+      request,
+    );
+  }
+
+  if (
+    url.pathname === "/api/chat/rooms" ||
+    /^\/api\/chat\/rooms\/[A-Za-z0-9_-]{16,64}$/.test(url.pathname)
+  ) {
+    return await (dependencies.chatRoomHandler ?? handleProductionChatRooms)(
       request,
     );
   }
@@ -146,39 +157,64 @@ if (import.meta.main) {
 let productionChatAuthHandler:
   | ((request: Request) => Promise<Response>)
   | null = null;
+let productionChatRoomHandler:
+  | ((request: Request) => Promise<Response>)
+  | null = null;
 
 async function handleProductionChatAuth(request: Request): Promise<Response> {
   try {
-    if (!productionChatAuthHandler) {
-      const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
-      const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
-      const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
-      const repository = new ChatRepository(kv);
-      const sessionService = new ChatSessionService({ repository });
-      const service = new OtpAuthService({
-        repository,
-        mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
-        authSecret,
-      });
-      const otpHandler = createOtpAuthHandler(service, {
-        onVerified: (email, verifiedRequest) =>
-          sessionService.completeOtpAuthentication(email, verifiedRequest),
-      });
-      const sessionHandler = createSessionAuthHandler(sessionService);
-      productionChatAuthHandler = (authRequest) => {
-        const path = new URL(authRequest.url).pathname;
-        return path === "/api/chat/auth/request-otp" ||
-            path === "/api/chat/auth/verify-otp"
-          ? otpHandler(authRequest)
-          : sessionHandler(authRequest);
-      };
-    }
+    initializeProductionChatHandlers();
+    if (!productionChatAuthHandler) throw new Error("Auth handler unavailable");
     return await productionChatAuthHandler(request);
   } catch {
     return jsonResponse({ error: "Authentication is not configured" }, 503, {
       "cache-control": "no-store",
     });
   }
+}
+
+async function handleProductionChatRooms(request: Request): Promise<Response> {
+  try {
+    initializeProductionChatHandlers();
+    if (!productionChatRoomHandler) throw new Error("Room handler unavailable");
+    return await productionChatRoomHandler(request);
+  } catch {
+    return jsonResponse({ error: "Chat is not configured" }, 503, {
+      "cache-control": "no-store",
+    });
+  }
+}
+
+function initializeProductionChatHandlers(): void {
+  if (productionChatAuthHandler && productionChatRoomHandler) return;
+  const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
+  const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
+  const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
+  const repository = new ChatRepository(kv);
+  const sessionService = new ChatSessionService({ repository });
+  const service = new OtpAuthService({
+    repository,
+    mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
+    authSecret,
+  });
+  const otpHandler = createOtpAuthHandler(service, {
+    onVerified: (email, verifiedRequest) =>
+      sessionService.completeOtpAuthentication(email, verifiedRequest),
+  });
+  const sessionHandler = createSessionAuthHandler(sessionService);
+  productionChatAuthHandler = (authRequest) => {
+    const path = new URL(authRequest.url).pathname;
+    return path === "/api/chat/auth/request-otp" ||
+        path === "/api/chat/auth/verify-otp"
+      ? otpHandler(authRequest)
+      : sessionHandler(authRequest);
+  };
+  productionChatRoomHandler = createChatRoomHandler(
+    new ChatRoomService({
+      repository,
+      sessions: sessionService,
+    }),
+  );
 }
 
 async function handleDocumentCollectionRequest(

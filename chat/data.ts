@@ -45,6 +45,10 @@ export interface Room {
   updatedAt: IsoDateTime;
 }
 
+interface RoomOwnerCount {
+  count: number;
+}
+
 export interface Member {
   roomId: string;
   userId: string;
@@ -130,6 +134,17 @@ export const chatKeys = Object.freeze({
     "roomsByOwner",
     ownerId,
     roomId,
+  ],
+  roomByMember: (userId: string, roomId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "roomsByMember",
+    userId,
+    roomId,
+  ],
+  roomOwnerCount: (ownerId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "roomOwnerCounts",
+    ownerId,
   ],
   member: (roomId: string, userId: string): Deno.KvKey => [
     ...chatPrefix,
@@ -371,6 +386,39 @@ export class ChatRepository {
       .commit();
   }
 
+  async createRoomWithOwner(room: Room, owner: Member): Promise<
+    "created" | "limit" | "conflict"
+  > {
+    const roomKey = chatKeys.room(room.id);
+    const ownerIndexKey = chatKeys.roomByOwner(room.ownerId, room.id);
+    const ownerMemberKey = chatKeys.member(room.id, room.ownerId);
+    const memberIndexKey = chatKeys.roomByMember(room.ownerId, room.id);
+    const countKey = chatKeys.roomOwnerCount(room.ownerId);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const countEntry = await this.kv.get<RoomOwnerCount>(countKey);
+      const count = countEntry.value?.count ?? 0;
+      if (count >= chatLimits.maxOwnedRooms) return "limit";
+
+      const result = await this.kv.atomic()
+        .check(
+          { key: roomKey, versionstamp: null },
+          { key: ownerIndexKey, versionstamp: null },
+          { key: ownerMemberKey, versionstamp: null },
+          { key: memberIndexKey, versionstamp: null },
+          { key: countKey, versionstamp: countEntry.versionstamp },
+        )
+        .set(roomKey, room)
+        .set(ownerIndexKey, room.id)
+        .set(ownerMemberKey, owner)
+        .set(memberIndexKey, room.id)
+        .set(countKey, { count: count + 1 } satisfies RoomOwnerCount)
+        .commit();
+      if (result.ok) return "created";
+    }
+    return "conflict";
+  }
+
   async getRoom(roomId: string): Promise<Room | null> {
     return (await this.kv.get<Room>(chatKeys.room(roomId))).value;
   }
@@ -388,8 +436,42 @@ export class ChatRepository {
     return roomIds;
   }
 
+  async listRoomIdsByMember(
+    userId: string,
+    limit = chatLimits.maxOwnedRooms + chatLimits.maxRoomMembers,
+  ): Promise<string[]> {
+    const roomIds: string[] = [];
+    const entries = this.kv.list<string>(
+      { prefix: ["chat", "roomsByMember", userId] },
+      { limit: Math.max(1, Math.floor(limit)) },
+    );
+    for await (const entry of entries) roomIds.push(entry.value);
+    return roomIds;
+  }
+
+  async updateRoom(
+    room: Room,
+    expectedVersionstamp: string,
+  ): Promise<boolean> {
+    const result = await this.kv.atomic()
+      .check({
+        key: chatKeys.room(room.id),
+        versionstamp: expectedVersionstamp,
+      })
+      .set(chatKeys.room(room.id), room)
+      .commit();
+    return result.ok;
+  }
+
+  async getRoomEntry(roomId: string): Promise<Deno.KvEntryMaybe<Room>> {
+    return await this.kv.get<Room>(chatKeys.room(roomId));
+  }
+
   async setMember(member: Member): Promise<void> {
-    await this.kv.set(chatKeys.member(member.roomId, member.userId), member);
+    await this.kv.atomic()
+      .set(chatKeys.member(member.roomId, member.userId), member)
+      .set(chatKeys.roomByMember(member.userId, member.roomId), member.roomId)
+      .commit();
   }
 
   async getMember(roomId: string, userId: string): Promise<Member | null> {

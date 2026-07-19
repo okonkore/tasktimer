@@ -7,9 +7,14 @@ function assert(condition: unknown, message: string): asserts condition {
 Deno.test("timer and chat routes are served independently", async () => {
   const timerResponse = await handleRequest(new Request("http://localhost/"));
   assert(timerResponse.status === 200, "timer route should return 200");
+  const timerHtml = await timerResponse.text();
   assert(
-    (await timerResponse.text()).includes("Paradise Timer"),
+    timerHtml.includes("Paradise Timer"),
     "timer route should serve the timer page",
+  );
+  assert(
+    timerHtml.includes('href="/chat/"'),
+    "timer route should expose chat navigation",
   );
 
   const chatResponse = await handleRequest(
@@ -56,5 +61,27 @@ Deno.test("chat authentication routes use the configured handler", async () => {
   assert(
     JSON.stringify(handledPaths) === JSON.stringify(paths),
     "all auth and session routes should be delegated",
+  );
+});
+
+Deno.test("chat room API routes use the configured handler", async () => {
+  const handledPaths: string[] = [];
+  const dependencies = {
+    chatRoomHandler: (request: Request) => {
+      handledPaths.push(new URL(request.url).pathname);
+      return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
+    },
+  };
+  const paths = ["/api/chat/rooms", "/api/chat/rooms/room-0000000000000001"];
+  for (const path of paths) {
+    const response = await handleRequest(
+      new Request(`http://localhost${path}`),
+      dependencies,
+    );
+    assert(response.status === 202, "room handler response should be returned");
+  }
+  assert(
+    JSON.stringify(handledPaths) === JSON.stringify(paths),
+    "room collection and item routes should be delegated",
   );
 });
