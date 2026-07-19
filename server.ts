@@ -1,3 +1,10 @@
+import {
+  createOtpAuthHandler,
+  OtpAuthService,
+  ResendOtpMailer,
+} from "./chat/auth.ts";
+import { ChatRepository } from "./chat/data.ts";
+
 const kv = await Deno.openKv();
 
 const stateKey: Deno.KvKey = ["tasktimer", "state"];
@@ -48,7 +55,14 @@ type TimerDocument = {
   updatedAt: string;
 };
 
-export async function handleRequest(request: Request): Promise<Response> {
+export interface RequestDependencies {
+  chatAuthHandler?: (request: Request) => Promise<Response>;
+}
+
+export async function handleRequest(
+  request: Request,
+  dependencies: RequestDependencies = {},
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.pathname === "/api/chat/health") {
@@ -60,6 +74,15 @@ export async function handleRequest(request: Request): Promise<Response> {
     return jsonResponse({ ok: true, service: "chat" }, 200, {
       "cache-control": "no-store",
     });
+  }
+
+  if (
+    url.pathname === "/api/chat/auth/request-otp" ||
+    url.pathname === "/api/chat/auth/verify-otp"
+  ) {
+    return await (dependencies.chatAuthHandler ?? handleProductionChatAuth)(
+      request,
+    );
   }
 
   if (url.pathname.startsWith("/api/chat/")) {
@@ -111,7 +134,32 @@ export async function handleRequest(request: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  Deno.serve(handleRequest);
+  Deno.serve((request) => handleRequest(request));
+}
+
+let productionChatAuthHandler:
+  | ((request: Request) => Promise<Response>)
+  | null = null;
+
+async function handleProductionChatAuth(request: Request): Promise<Response> {
+  try {
+    if (!productionChatAuthHandler) {
+      const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
+      const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
+      const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
+      const service = new OtpAuthService({
+        repository: new ChatRepository(kv),
+        mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
+        authSecret,
+      });
+      productionChatAuthHandler = createOtpAuthHandler(service);
+    }
+    return await productionChatAuthHandler(request);
+  } catch {
+    return jsonResponse({ error: "Authentication is not configured" }, 503, {
+      "cache-control": "no-store",
+    });
+  }
 }
 
 async function handleDocumentCollectionRequest(

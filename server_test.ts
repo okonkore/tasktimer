@@ -31,3 +31,23 @@ Deno.test("chat health endpoint is available", async () => {
   assert(body.ok === true, "health response should be healthy");
   assert(body.service === "chat", "health response should identify chat");
 });
+
+Deno.test("chat authentication routes use the configured handler", async () => {
+  let handledPath = "";
+  const response = await handleRequest(
+    new Request("http://localhost/api/chat/auth/request-otp", {
+      method: "POST",
+    }),
+    {
+      chatAuthHandler: (request) => {
+        handledPath = new URL(request.url).pathname;
+        return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
+      },
+    },
+  );
+  assert(response.status === 202, "auth handler response should be returned");
+  assert(
+    handledPath === "/api/chat/auth/request-otp",
+    "auth route should be delegated",
+  );
+});

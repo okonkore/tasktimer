@@ -212,6 +212,10 @@ function pageSize(value?: number): number {
   return Math.max(1, Math.min(chatLimits.maxPageSize, Math.floor(value!)));
 }
 
+function otpChallengeExpireIn(challenge: OtpChallenge): number {
+  return Math.max(1, new Date(challenge.expiresAt).getTime() - Date.now());
+}
+
 export interface MessagePageOptions {
   limit?: number;
   before?: string;
@@ -272,6 +276,36 @@ export class ChatRepository {
 
   async getOtpChallenge(email: string): Promise<OtpChallenge | null> {
     return (await this.kv.get<OtpChallenge>(chatKeys.otp(email))).value;
+  }
+
+  async getOtpChallengeEntry(
+    email: string,
+  ): Promise<Deno.KvEntryMaybe<OtpChallenge>> {
+    return await this.kv.get<OtpChallenge>(chatKeys.otp(email));
+  }
+
+  async replaceOtpChallenge(
+    challenge: OtpChallenge,
+    expectedVersionstamp: string | null,
+  ): Promise<string | null> {
+    const key = chatKeys.otp(challenge.email);
+    const result = await this.kv.atomic()
+      .check({ key, versionstamp: expectedVersionstamp })
+      .set(key, challenge, { expireIn: otpChallengeExpireIn(challenge) })
+      .commit();
+    return result.ok ? result.versionstamp : null;
+  }
+
+  async deleteOtpChallenge(
+    email: string,
+    expectedVersionstamp: string,
+  ): Promise<boolean> {
+    const key = chatKeys.otp(email);
+    const result = await this.kv.atomic()
+      .check({ key, versionstamp: expectedVersionstamp })
+      .delete(key)
+      .commit();
+    return result.ok;
   }
 
   async setRoom(room: Room): Promise<void> {
