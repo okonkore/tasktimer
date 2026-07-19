@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Paradise Timer</title>
-    <link rel="stylesheet" href="./styles.css?v=20260705-paradise-timer" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-file-export" />
   </head>
   <body>
     <main class="app-shell">
@@ -55,7 +55,10 @@
         <section class="task-section stock-section" aria-label="ストック一覧">
           <div class="section-heading">
             <h2>ストック一覧</h2>
-            <span id="stockCount">0件</span>
+            <div class="section-heading-actions">
+              <span id="stockCount">0件</span>
+              <button class="small-button" id="exportDataBtn" type="button">ファイルに保存</button>
+            </div>
           </div>
           <div class="task-list" id="stockList"></div>
           <p class="empty-state" id="stockEmptyState">+ ボタンからストックを追加できます</p>
@@ -113,6 +116,6 @@
       </form>
     </dialog>
 
-    <script src="./client.js?v=20260719-deno-kv"></script>
+    <script src="./client.js?v=20260719-file-export"></script>
   </body>
 </html>

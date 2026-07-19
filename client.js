@@ -10,6 +10,7 @@ const els = {
   openStock: document.querySelector("#openStockBtn"),
   backToTimer: document.querySelector("#backToTimerBtn"),
   addStock: document.querySelector("#addStockBtn"),
+  exportData: document.querySelector("#exportDataBtn"),
   timerStatus: document.querySelector("#timerStatus"),
   currentTaskName: document.querySelector("#currentTaskName"),
   timeDisplay: document.querySelector("#timeDisplay"),
@@ -236,6 +237,25 @@ async function persistStateToServer() {
   } catch (error) {
     console.warn("タスクをサーバーへ保存できませんでした", error);
   }
+}
+
+function exportDataFile() {
+  const backup = {
+    format: "paradise-timer-backup",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    state,
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const date = new Date().toLocaleDateString("sv-SE");
+  link.href = url;
+  link.download = `paradise-timer-${date}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function render() {
@@ -833,6 +853,7 @@ function clampInteger(value, min, max) {
 els.openStock.addEventListener("click", showStockView);
 els.backToTimer.addEventListener("click", showTimerView);
 els.addStock.addEventListener("click", () => openStockDialog());
+els.exportData.addEventListener("click", exportDataFile);
 els.startPause.addEventListener("click", startOrPause);
 els.reset.addEventListener("click", () => resetTimerState(0));
 els.next.addEventListener("click", skipToNext);
