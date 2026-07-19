@@ -17,8 +17,8 @@ Deno.test("timer and chat routes are served independently", async () => {
   );
   assert(chatResponse.status === 200, "chat route should return 200");
   assert(
-    (await chatResponse.text()).includes("チャット機能を準備しています。"),
-    "chat route should serve the chat shell",
+    (await chatResponse.text()).includes('id="chatApp"'),
+    "chat route should serve the interactive chat shell",
   );
 });
 

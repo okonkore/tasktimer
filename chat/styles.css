@@ -1,6 +1,7 @@
 :root {
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
 }
 
 * {
@@ -42,9 +43,154 @@ h1 {
   margin: 0;
 }
 
+.lead {
+  margin: 12px 0 24px;
+  line-height: 1.65;
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #9facaa;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+}
+
+input:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #5db8b2;
+  outline-offset: 2px;
+}
+
+button,
+.button-link {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #176f6b;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+
+button:hover,
+.button-link:hover {
+  background: #11534f;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.form-error,
+.form-success,
+.field-hint,
+.privacy-note,
+.email-confirmation,
+.resend-row {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.form-error {
+  color: #a52a2a;
+}
+
+.form-success {
+  color: #176f6b;
+}
+
+.field-hint,
+.privacy-note {
+  color: #52615e;
+}
+
+.email-confirmation {
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.resend-row,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.secondary {
+  color: #11534f;
+  border: 1px solid #a8bbb8;
+  background: #fff;
+}
+
+.secondary:hover {
+  background: #edf5f3;
+}
+
+.text-button {
+  min-height: auto;
+  margin-top: 18px;
+  padding: 0;
+  color: #11534f;
+  background: transparent;
+  text-decoration: underline;
+}
+
+.text-button:hover {
+  color: #0b3936;
+  background: transparent;
+}
+
 a {
   display: inline-block;
   margin-top: 12px;
   color: #11534f;
   font-weight: 700;
+}
+
+.actions a,
+.actions button {
+  margin-top: 0;
+}
+
+.back-link {
+  margin-top: 20px;
+}
+
+@media (max-width: 480px) {
+  .chat-shell {
+    display: block;
+    padding: 16px;
+  }
+
+  .chat-panel {
+    margin: 0 auto;
+    padding: 22px 18px;
+  }
+
+  .resend-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

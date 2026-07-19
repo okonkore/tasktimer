@@ -2,19 +2,13 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Paradise Timer Chat</title>
     <link rel="stylesheet" href="/chat/styles.css" />
   </head>
   <body>
-    <main class="chat-shell">
-      <section class="chat-panel" aria-labelledby="chatTitle">
-        <p class="eyebrow">Paradise Timer</p>
-        <h1 id="chatTitle">チャット</h1>
-        <p>チャット機能を準備しています。</p>
-        <a href="/">タイマーへ戻る</a>
-      </section>
-    </main>
-    <script src="/chat/client.js"></script>
+    <main id="chatApp" class="chat-shell" aria-live="polite"></main>
+    <script src="/chat/client.js" defer></script>
   </body>
 </html>

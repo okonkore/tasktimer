@@ -208,6 +208,80 @@ Deno.test("protected me endpoint requires a valid session", async () => {
   });
 });
 
+Deno.test("profile updates require CSRF and keep email private", async () => {
+  await withSessions(async ({ repository, service, handler }) => {
+    const login = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const cookies = cookieHeader(login);
+    const csrfToken = cookieValue(cookies, csrfCookieName);
+
+    const missingCsrf = await handler(request("/api/chat/me", {
+      method: "PATCH",
+      headers: { cookie: cookies },
+      body: JSON.stringify({ displayName: "Ada" }),
+    }));
+    assert(
+      missingCsrf.status === 403,
+      "profile updates without CSRF should be rejected",
+    );
+
+    const updated = await handler(request("/api/chat/me", {
+      method: "PATCH",
+      headers: {
+        cookie: cookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrfToken,
+      },
+      body: JSON.stringify({ displayName: "  Ada Lovelace  " }),
+    }));
+    assert(updated.status === 200, "valid profile update should succeed");
+    assertEquals(
+      await updated.json(),
+      {
+        user: {
+          id: "user-1",
+          displayName: "Ada Lovelace",
+          emailNotificationsEnabled: true,
+        },
+        needsProfile: false,
+      },
+      "profile response should contain only public user fields",
+    );
+    const stored = await repository.getUser("user-1");
+    assert(stored?.email === "ada@example.com", "email must be preserved");
+    assert(stored?.displayName === "Ada Lovelace", "name should be trimmed");
+  });
+});
+
+Deno.test("profile display names must contain 1 through 30 non-whitespace characters", async () => {
+  await withSessions(async ({ repository, service, handler }) => {
+    const login = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const cookies = cookieHeader(login);
+    const csrfToken = cookieValue(cookies, csrfCookieName);
+    for (const displayName of ["   ", "A".repeat(31)]) {
+      const response = await handler(request("/api/chat/me", {
+        method: "PATCH",
+        headers: {
+          cookie: cookies,
+          origin: "https://chat.example",
+          [csrfHeaderName]: csrfToken,
+        },
+        body: JSON.stringify({ displayName }),
+      }));
+      assert(response.status === 400, "invalid display names should fail");
+    }
+    assert(
+      (await repository.getUser("user-1"))?.displayName === null,
+      "invalid updates must not change the profile",
+    );
+  });
+});
+
 Deno.test("logout requires same-origin CSRF and revokes the session", async () => {
   await withSessions(async ({ service, handler }) => {
     const login = await service.completeOtpAuthentication(

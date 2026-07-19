@@ -249,6 +249,26 @@ export class ChatRepository {
     return (await this.kv.get<User>(chatKeys.user(userId))).value;
   }
 
+  async updateUserDisplayName(
+    userId: string,
+    displayName: string,
+    updatedAt: IsoDateTime,
+  ): Promise<User | null> {
+    const key = chatKeys.user(userId);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const entry = await this.kv.get<User>(key);
+      if (!entry.value || !entry.versionstamp) return null;
+
+      const user: User = { ...entry.value, displayName, updatedAt };
+      const result = await this.kv.atomic()
+        .check({ key, versionstamp: entry.versionstamp })
+        .set(key, user)
+        .commit();
+      if (result.ok) return user;
+    }
+    return null;
+  }
+
   async getUserByEmail(email: string): Promise<User | null> {
     const userId =
       (await this.kv.get<string>(chatKeys.userByEmail(email))).value;

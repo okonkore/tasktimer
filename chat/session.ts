@@ -14,6 +14,8 @@ export const sessionCookieName = "__Host-tasktimer_chat_session";
 export const csrfCookieName = "__Host-tasktimer_chat_csrf";
 export const csrfHeaderName = "x-csrf-token";
 
+const maxProfileRequestBytes = 8 * 1024;
+
 type Clock = () => Date;
 type TokenGenerator = () => string;
 type UserIdGenerator = () => string;
@@ -180,6 +182,17 @@ export class ChatSessionService {
     );
   }
 
+  async updateDisplayName(
+    authenticated: AuthenticatedChatRequest,
+    displayName: string,
+  ): Promise<User | null> {
+    return await this.#repository.updateUserDisplayName(
+      authenticated.user.id,
+      displayName,
+      this.#now().toISOString(),
+    );
+  }
+
   async #getOrCreateUser(email: string): Promise<User> {
     const normalizedEmail = normalizeEmail(email);
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -210,16 +223,40 @@ export function createSessionAuthHandler(
   return async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
     if (path === "/api/chat/me") {
-      if (request.method !== "GET") {
-        return sessionJson({ error: "Method not allowed" }, 405, {
-          Allow: "GET",
+      if (request.method === "GET") {
+        const authenticated = await requireChatAuthentication(request, service);
+        if (authenticated instanceof Response) return authenticated;
+        return sessionJson({
+          user: currentUser(authenticated.user),
+          needsProfile: authenticated.user.displayName === null,
         });
       }
-      const authenticated = await requireChatAuthentication(request, service);
-      if (authenticated instanceof Response) return authenticated;
-      return sessionJson({
-        user: currentUser(authenticated.user),
-        needsProfile: authenticated.user.displayName === null,
+
+      if (request.method === "PATCH") {
+        const authenticated = await requireChatMutation(request, service);
+        if (authenticated instanceof Response) return authenticated;
+        const body = await readProfileJson(request);
+        if (body instanceof Response) return body;
+        const displayName = displayNameFrom(body);
+        if (!displayName) {
+          return sessionJson(
+            { error: "Display name must be between 1 and 30 characters" },
+            400,
+          );
+        }
+
+        const user = await service.updateDisplayName(
+          authenticated,
+          displayName,
+        );
+        if (!user) {
+          return sessionJson({ error: "Could not update profile" }, 503);
+        }
+        return sessionJson({ user: currentUser(user), needsProfile: false });
+      }
+
+      return sessionJson({ error: "Method not allowed" }, 405, {
+        Allow: "GET, PATCH",
       });
     }
 
@@ -277,6 +314,36 @@ function currentUser(user: User): CurrentUser {
     displayName: user.displayName,
     emailNotificationsEnabled: user.emailNotificationsEnabled,
   };
+}
+
+function displayNameFrom(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const displayName = (value as Record<string, unknown>).displayName;
+  if (typeof displayName !== "string") return null;
+  const normalized = displayName.trim();
+  return normalized.length >= 1 && normalized.length <= 30 ? normalized : null;
+}
+
+async function readProfileJson(request: Request): Promise<unknown | Response> {
+  const declaredLength = Number(request.headers.get("content-length") ?? 0);
+  if (declaredLength > maxProfileRequestBytes) {
+    return sessionJson({ error: "Request body is too large" }, 413);
+  }
+
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    return sessionJson({ error: "Could not read request body" }, 400);
+  }
+  if (new TextEncoder().encode(text).byteLength > maxProfileRequestBytes) {
+    return sessionJson({ error: "Request body is too large" }, 413);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return sessionJson({ error: "Invalid JSON" }, 400);
+  }
 }
 
 function isSecureToken(value: string): boolean {
