@@ -23,6 +23,14 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "styles.css",
     contentType: "text/css; charset=utf-8",
   }],
+  ["/chat/client.js", {
+    path: "chat/client.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/chat/styles.css", {
+    path: "chat/styles.css",
+    contentType: "text/css; charset=utf-8",
+  }],
 ]);
 
 type AppState = {
@@ -40,8 +48,23 @@ type TimerDocument = {
   updatedAt: string;
 };
 
-Deno.serve(async (request) => {
+export async function handleRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
+
+  if (url.pathname === "/api/chat/health") {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed" }, 405, {
+        Allow: "GET",
+      });
+    }
+    return jsonResponse({ ok: true, service: "chat" }, 200, {
+      "cache-control": "no-store",
+    });
+  }
+
+  if (url.pathname.startsWith("/api/chat/")) {
+    return jsonResponse({ error: "Not found" }, 404);
+  }
 
   if (url.pathname === "/api/documents") {
     return handleDocumentCollectionRequest(request);
@@ -64,7 +87,10 @@ Deno.serve(async (request) => {
     });
   }
 
-  const file = staticFiles.get(url.pathname);
+  const file = staticFiles.get(url.pathname) ||
+    (url.pathname === "/chat" || url.pathname.startsWith("/chat/")
+      ? { path: "chat/index.html", contentType: "text/html; charset=utf-8" }
+      : undefined);
   if (!file) return new Response("Not found", { status: 404 });
 
   try {
@@ -82,7 +108,11 @@ Deno.serve(async (request) => {
     console.error("Failed to serve static file", error);
     return new Response("Internal server error", { status: 500 });
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handleRequest);
+}
 
 async function handleDocumentCollectionRequest(
   request: Request,
