@@ -33,21 +33,28 @@ Deno.test("chat health endpoint is available", async () => {
 });
 
 Deno.test("chat authentication routes use the configured handler", async () => {
-  let handledPath = "";
-  const response = await handleRequest(
-    new Request("http://localhost/api/chat/auth/request-otp", {
-      method: "POST",
-    }),
-    {
-      chatAuthHandler: (request) => {
-        handledPath = new URL(request.url).pathname;
-        return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
-      },
+  const handledPaths: string[] = [];
+  const dependencies = {
+    chatAuthHandler: (request: Request) => {
+      handledPaths.push(new URL(request.url).pathname);
+      return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
     },
-  );
-  assert(response.status === 202, "auth handler response should be returned");
+  };
+  const paths = [
+    "/api/chat/auth/request-otp",
+    "/api/chat/auth/verify-otp",
+    "/api/chat/auth/logout",
+    "/api/chat/me",
+  ];
+  for (const path of paths) {
+    const response = await handleRequest(
+      new Request(`http://localhost${path}`, { method: "POST" }),
+      dependencies,
+    );
+    assert(response.status === 202, "auth handler response should be returned");
+  }
   assert(
-    handledPath === "/api/chat/auth/request-otp",
-    "auth route should be delegated",
+    JSON.stringify(handledPaths) === JSON.stringify(paths),
+    "all auth and session routes should be delegated",
   );
 });

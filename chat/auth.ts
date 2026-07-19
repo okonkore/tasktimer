@@ -222,6 +222,7 @@ export function isValidEmail(email: unknown): email is string {
 
 export function createOtpAuthHandler(
   service: OtpAuthService,
+  options: OtpAuthHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
@@ -270,6 +271,9 @@ export function createOtpAuthHandler(
     }
     const result = await service.verifyOtp(email, code);
     if (result.status === "verified") {
+      if (options.onVerified) {
+        return await options.onVerified(result.email, request);
+      }
       return authJson({ ok: true, verified: true });
     }
     if (result.status === "temporary-error") {
@@ -280,6 +284,10 @@ export function createOtpAuthHandler(
     }
     return authJson({ error: genericVerificationError }, 401);
   };
+}
+
+export interface OtpAuthHandlerOptions {
+  onVerified?: (email: string, request: Request) => Promise<Response>;
 }
 
 function resendRetryAfterSeconds(challenge: OtpChallenge, now: Date): number {

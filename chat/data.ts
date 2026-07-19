@@ -261,8 +261,44 @@ export class ChatRepository {
     });
   }
 
+  async createSession(session: Session): Promise<boolean> {
+    const key = chatKeys.session(session.id);
+    const result = await this.kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, session, {
+        expireIn: Math.max(
+          1,
+          new Date(session.expiresAt).getTime() - Date.now(),
+        ),
+      })
+      .commit();
+    return result.ok;
+  }
+
   async getSession(sessionId: string): Promise<Session | null> {
     return (await this.kv.get<Session>(chatKeys.session(sessionId))).value;
+  }
+
+  async getSessionEntry(
+    sessionId: string,
+  ): Promise<Deno.KvEntryMaybe<Session>> {
+    return await this.kv.get<Session>(chatKeys.session(sessionId));
+  }
+
+  async deleteSession(
+    sessionId: string,
+    expectedVersionstamp?: string,
+  ): Promise<boolean> {
+    const key = chatKeys.session(sessionId);
+    if (!expectedVersionstamp) {
+      await this.kv.delete(key);
+      return true;
+    }
+    const result = await this.kv.atomic()
+      .check({ key, versionstamp: expectedVersionstamp })
+      .delete(key)
+      .commit();
+    return result.ok;
   }
 
   async setOtpChallenge(challenge: OtpChallenge): Promise<void> {

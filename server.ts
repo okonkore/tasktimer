@@ -4,6 +4,10 @@ import {
   ResendOtpMailer,
 } from "./chat/auth.ts";
 import { ChatRepository } from "./chat/data.ts";
+import {
+  ChatSessionService,
+  createSessionAuthHandler,
+} from "./chat/session.ts";
 
 const kv = await Deno.openKv();
 
@@ -78,7 +82,9 @@ export async function handleRequest(
 
   if (
     url.pathname === "/api/chat/auth/request-otp" ||
-    url.pathname === "/api/chat/auth/verify-otp"
+    url.pathname === "/api/chat/auth/verify-otp" ||
+    url.pathname === "/api/chat/auth/logout" ||
+    url.pathname === "/api/chat/me"
   ) {
     return await (dependencies.chatAuthHandler ?? handleProductionChatAuth)(
       request,
@@ -147,12 +153,25 @@ async function handleProductionChatAuth(request: Request): Promise<Response> {
       const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
       const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
       const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
+      const repository = new ChatRepository(kv);
+      const sessionService = new ChatSessionService({ repository });
       const service = new OtpAuthService({
-        repository: new ChatRepository(kv),
+        repository,
         mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
         authSecret,
       });
-      productionChatAuthHandler = createOtpAuthHandler(service);
+      const otpHandler = createOtpAuthHandler(service, {
+        onVerified: (email, verifiedRequest) =>
+          sessionService.completeOtpAuthentication(email, verifiedRequest),
+      });
+      const sessionHandler = createSessionAuthHandler(sessionService);
+      productionChatAuthHandler = (authRequest) => {
+        const path = new URL(authRequest.url).pathname;
+        return path === "/api/chat/auth/request-otp" ||
+            path === "/api/chat/auth/verify-otp"
+          ? otpHandler(authRequest)
+          : sessionHandler(authRequest);
+      };
     }
     return await productionChatAuthHandler(request);
   } catch {
