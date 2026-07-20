@@ -119,9 +119,10 @@ function mutation(
   path: string,
   login: Login,
   body?: unknown,
+  method = "POST",
 ): Request {
   const options: RequestInit = {
-    method: "POST",
+    method,
     headers: {
       cookie: login.cookies,
       origin: "https://chat.example",
@@ -276,6 +277,183 @@ Deno.test("members can list display names and roles without exposing email", asy
     assert(
       !JSON.stringify(body).includes("@example.com"),
       "member email addresses must remain private",
+    );
+  });
+});
+
+Deno.test("only the owner can change member roles while preserving visibleFrom", async () => {
+  await withJoinService(async ({
+    repository,
+    roomHandler,
+    joinHandler,
+    login,
+    createRoom,
+    setNow,
+  }) => {
+    const owner = await login("owner@example.com");
+    const member = await login("member@example.com");
+    const otherMember = await login("other@example.com");
+    const roomId = await createRoom(owner);
+    const requestsPath = `/api/chat/rooms/${roomId}/requests`;
+    for (const applicant of [member, otherMember]) {
+      await joinHandler(mutation(requestsPath, applicant));
+      await joinHandler(mutation(
+        `${requestsPath}/${applicant.userId}/approve`,
+        owner,
+        { role: "viewer" },
+      ));
+    }
+    const original = await repository.getMember(roomId, member.userId);
+    assert(original !== null, "approved membership should exist");
+    const rolePath = `/api/chat/rooms/${roomId}/members/${member.userId}`;
+
+    const missingCsrf = await joinHandler(request(rolePath, {
+      method: "PATCH",
+      headers: { cookie: owner.cookies },
+      body: JSON.stringify({ role: "writer" }),
+    }));
+    assert(missingCsrf.status === 403, "role changes must require CSRF");
+
+    const forbidden = await joinHandler(
+      mutation(rolePath, otherMember, { role: "writer" }, "PATCH"),
+    );
+    assert(forbidden.status === 403, "non-owners cannot change roles");
+
+    const invalid = await joinHandler(
+      mutation(rolePath, owner, { role: "owner" }, "PATCH"),
+    );
+    assert(invalid.status === 400, "the owner role cannot be assigned");
+
+    const ownerChange = await joinHandler(mutation(
+      `/api/chat/rooms/${roomId}/members/${owner.userId}`,
+      owner,
+      { role: "viewer" },
+      "PATCH",
+    ));
+    assert(ownerChange.status === 409, "the owner cannot lower their role");
+
+    setNow("2026-07-19T14:00:00.000Z");
+    const changed = await joinHandler(
+      mutation(rolePath, owner, { role: "writer" }, "PATCH"),
+    );
+    const changedBody = await changed.json();
+    assert(changed.status === 200, "the owner should change member roles");
+    assert(
+      changedBody.membership.role === "writer" &&
+        changedBody.membership.visibleFrom === original.visibleFrom,
+      "the response should return the new role and original visibility bound",
+    );
+    const stored = await repository.getMember(roomId, member.userId);
+    assert(stored?.role === "writer", "the new role should be stored");
+    assert(
+      stored.visibleFrom === original.visibleFrom,
+      "role changes must preserve visibleFrom",
+    );
+    assert(
+      stored.updatedAt === "2026-07-19T14:00:00.000Z",
+      "role changes should update the membership timestamp",
+    );
+
+    const room = await roomHandler(request(`/api/chat/rooms/${roomId}`, {
+      headers: { cookie: member.cookies },
+    }));
+    const roomBody = await room.json();
+    assert(
+      room.status === 200 && roomBody.membership.role === "writer",
+      "subsequent authorization reads should see the new role immediately",
+    );
+  });
+});
+
+Deno.test("only the owner can remove members and removed members can reapply", async () => {
+  await withJoinService(async ({
+    repository,
+    roomHandler,
+    joinHandler,
+    login,
+    createRoom,
+    setNow,
+  }) => {
+    const owner = await login("owner@example.com");
+    const member = await login("member@example.com");
+    const otherMember = await login("other@example.com");
+    const roomId = await createRoom(owner);
+    const requestsPath = `/api/chat/rooms/${roomId}/requests`;
+    for (const applicant of [member, otherMember]) {
+      await joinHandler(mutation(requestsPath, applicant));
+      await joinHandler(mutation(
+        `${requestsPath}/${applicant.userId}/approve`,
+        owner,
+        { role: "viewer" },
+      ));
+    }
+    const removePath = `/api/chat/rooms/${roomId}/members/${member.userId}`;
+
+    const missingCsrf = await joinHandler(request(removePath, {
+      method: "DELETE",
+      headers: { cookie: owner.cookies },
+    }));
+    assert(missingCsrf.status === 403, "member removal must require CSRF");
+
+    const forbidden = await joinHandler(
+      mutation(removePath, otherMember, undefined, "DELETE"),
+    );
+    assert(forbidden.status === 403, "non-owners cannot remove members");
+
+    const ownerRemoval = await joinHandler(mutation(
+      `/api/chat/rooms/${roomId}/members/${owner.userId}`,
+      owner,
+      undefined,
+      "DELETE",
+    ));
+    assert(ownerRemoval.status === 409, "the owner cannot remove themself");
+
+    setNow("2026-07-19T15:00:00.000Z");
+    const removed = await joinHandler(
+      mutation(removePath, owner, undefined, "DELETE"),
+    );
+    const removedBody = await removed.json();
+    assert(removed.status === 200, "the owner should remove another member");
+    assert(
+      removedBody.membership.status === "removed" &&
+        removedBody.membership.removedAt === "2026-07-19T15:00:00.000Z",
+      "the response should identify the removed member and timestamp",
+    );
+
+    const [storedMember, storedRequest, roomIds] = await Promise.all([
+      repository.getMember(roomId, member.userId),
+      repository.getJoinRequest(roomId, member.userId),
+      repository.listRoomIdsByMember(member.userId),
+    ]);
+    assert(storedMember === null, "the membership should be deleted");
+    assert(!roomIds.includes(roomId), "the membership index should be deleted");
+    assert(
+      storedRequest?.status === "removed" &&
+        storedRequest.reviewedAt === "2026-07-19T15:00:00.000Z",
+      "the join request should record the removed state",
+    );
+
+    const room = await roomHandler(request(`/api/chat/rooms/${roomId}`, {
+      headers: { cookie: member.cookies },
+    }));
+    const roomBody = await room.json();
+    assert(room.status === 403, "removed members immediately lose room access");
+    assert(
+      roomBody.access.status === "removed" && roomBody.access.canRequest,
+      "removed members should be offered reapplication",
+    );
+    const members = await joinHandler(request(
+      `/api/chat/rooms/${roomId}/members`,
+      { headers: { cookie: member.cookies } },
+    ));
+    assert(members.status === 403, "removed members cannot list members");
+
+    const reapplied = await joinHandler(mutation(requestsPath, member));
+    assert(reapplied.status === 201, "removed members can reapply immediately");
+    assert(
+      (await repository.getJoinRequest(roomId, member.userId))?.status ===
+        "pending",
+      "reapplication should return the request to pending",
     );
   });
 });

@@ -774,6 +774,8 @@ async function renderMembersPage(roomId) {
     renderMembers(
       app.querySelector("[data-members]"),
       membersResult.body.members,
+      roomId,
+      roomResult.isOwner,
     );
     if (roomResult.isOwner) await loadJoinRequests(roomId);
   } catch (requestError) {
@@ -791,7 +793,7 @@ async function renderMembersPage(roomId) {
   }
 }
 
-function renderMembers(container, members) {
+function renderMembers(container, members, roomId, isOwner) {
   container.replaceChildren();
   if (!Array.isArray(members) || members.length === 0) {
     container.textContent = "メンバーはいません。";
@@ -805,8 +807,85 @@ function renderMembers(container, members) {
     const role = document.createElement("span");
     role.textContent = roleLabel(member.role);
     item.append(name, role);
+    if (isOwner && member.role !== "owner") {
+      item.append(createMemberActions(roomId, member));
+    }
     container.append(item);
   }
+}
+
+function createMemberActions(roomId, member) {
+  const form = document.createElement("form");
+  form.className = "member-actions";
+  const label = document.createElement("label");
+  label.textContent = "権限";
+  const select = document.createElement("select");
+  select.setAttribute(
+    "aria-label",
+    `${member.displayName || "メンバー"}の権限`,
+  );
+  for (
+    const [value, text] of [
+      ["viewer", "閲覧のみ"],
+      ["writer", "書き込み可"],
+    ]
+  ) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    option.selected = member.role === value;
+    select.append(option);
+  }
+  label.append(select);
+  const update = document.createElement("button");
+  update.type = "submit";
+  update.textContent = "権限を変更";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "secondary danger";
+  remove.textContent = "参加解除";
+  const error = document.createElement("p");
+  error.className = "form-error";
+  error.hidden = true;
+  form.append(label, update, remove, error);
+
+  const act = async (action, body) => {
+    update.disabled = remove.disabled = select.disabled = true;
+    error.hidden = true;
+    try {
+      const result = await requestJson(
+        `/api/chat/rooms/${encodeURIComponent(roomId)}/members/${
+          encodeURIComponent(member.userId)
+        }`,
+        action === "role" ? "PATCH" : "DELETE",
+        body,
+        true,
+      );
+      if (!result.response.ok) {
+        throw new Error(
+          apiError(result.body, "メンバー情報を更新できませんでした。"),
+        );
+      }
+      await renderMembersPage(roomId);
+    } catch (requestError) {
+      error.textContent = errorText(requestError);
+      error.hidden = false;
+      update.disabled = remove.disabled = select.disabled = false;
+    }
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void act("role", { role: select.value });
+  });
+  remove.addEventListener("click", () => {
+    if (
+      !confirm(
+        `${member.displayName || "このメンバー"}の参加を解除しますか？`,
+      )
+    ) return;
+    void act("remove");
+  });
+  return form;
 }
 
 async function loadJoinRequests(roomId) {

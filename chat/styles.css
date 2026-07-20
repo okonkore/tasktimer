@@ -294,20 +294,23 @@ a {
   font-size: 14px;
 }
 
-.request-actions {
+.request-actions,
+.member-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
   gap: 8px;
 }
 
-.request-actions label {
+.request-actions label,
+.member-actions label {
   display: grid;
   gap: 4px;
   flex: 1 1 150px;
 }
 
-.request-actions select {
+.request-actions select,
+.member-actions select {
   min-height: 44px;
   padding: 10px 12px;
   border: 1px solid #9facaa;
@@ -315,6 +318,20 @@ a {
   color: inherit;
   background: #fff;
   font: inherit;
+}
+
+.member-actions .form-error {
+  flex-basis: 100%;
+}
+
+button.danger {
+  color: #8f2828;
+  border: 1px solid #d9a4a4;
+  background: #fff5f5;
+}
+
+button.danger:hover {
+  background: #ffe4e4;
 }
 
 @media (max-width: 480px) {

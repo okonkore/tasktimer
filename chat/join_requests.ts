@@ -23,6 +23,9 @@ const requestActionPattern = new RegExp(
 const memberCollectionPattern = new RegExp(
   `^/api/chat/rooms/${roomIdPart}/members$`,
 );
+const memberItemPattern = new RegExp(
+  `^/api/chat/rooms/${roomIdPart}/members/${userIdPart}$`,
+);
 
 type Clock = () => Date;
 type JoinRole = Extract<MemberRole, "viewer" | "writer">;
@@ -50,6 +53,32 @@ export class ChatJoinRequestService {
 
   async handle(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
+    const memberItemMatch = path.match(memberItemPattern);
+    if (memberItemMatch) {
+      if (request.method !== "PATCH" && request.method !== "DELETE") {
+        return joinJson({ error: "Method not allowed" }, 405, {
+          Allow: "PATCH, DELETE",
+        });
+      }
+      const authenticated = await requireChatMutation(request, this.#sessions);
+      if (authenticated instanceof Response) return authenticated;
+      const [, roomId, memberId] = memberItemMatch;
+      if (request.method === "PATCH") {
+        const role = await approvalRoleFromRequest(request);
+        if (role instanceof Response) return role;
+        return await this.#changeMemberRole(
+          roomId,
+          memberId,
+          authenticated.user.id,
+          role,
+        );
+      }
+      return await this.#removeMember(
+        roomId,
+        memberId,
+        authenticated.user.id,
+      );
+    }
     const memberMatch = path.match(memberCollectionPattern);
     if (memberMatch) {
       if (request.method !== "GET") {
@@ -298,6 +327,122 @@ export class ChatJoinRequestService {
       }
     }
     return joinJson({ error: "Could not approve join request" }, 503);
+  }
+
+  async #changeMemberRole(
+    roomId: string,
+    memberId: string,
+    ownerId: string,
+    role: JoinRole,
+  ): Promise<Response> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const [roomEntry, memberEntry] = await Promise.all([
+        this.#repository.getRoomEntry(roomId),
+        this.#repository.getMemberEntry(roomId, memberId),
+      ]);
+      if (!roomEntry.value || !roomEntry.versionstamp) {
+        return joinJson({ error: "Room not found" }, 404);
+      }
+      if (roomEntry.value.ownerId !== ownerId) {
+        return joinJson(
+          { error: "Only the owner can change member permissions" },
+          403,
+        );
+      }
+      if (!memberEntry.value || !memberEntry.versionstamp) {
+        return joinJson({ error: "Room member not found" }, 404);
+      }
+      if (
+        memberId === roomEntry.value.ownerId ||
+        memberEntry.value.role === "owner"
+      ) {
+        return joinJson({ error: "The owner role cannot be changed" }, 409);
+      }
+
+      const member: Member = {
+        ...memberEntry.value,
+        role,
+        updatedAt: this.#now().toISOString(),
+      };
+      if (
+        await this.#repository.updateMember(
+          member,
+          memberEntry.versionstamp,
+          roomEntry.versionstamp,
+        )
+      ) {
+        return joinJson({
+          membership: {
+            userId: member.userId,
+            role: member.role,
+            visibleFrom: member.visibleFrom,
+            updatedAt: member.updatedAt,
+          },
+        });
+      }
+    }
+    return joinJson({ error: "Could not change member permissions" }, 503);
+  }
+
+  async #removeMember(
+    roomId: string,
+    memberId: string,
+    ownerId: string,
+  ): Promise<Response> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const [roomEntry, memberEntry, requestEntry] = await Promise.all([
+        this.#repository.getRoomEntry(roomId),
+        this.#repository.getMemberEntry(roomId, memberId),
+        this.#repository.getJoinRequestEntry(roomId, memberId),
+      ]);
+      if (!roomEntry.value || !roomEntry.versionstamp) {
+        return joinJson({ error: "Room not found" }, 404);
+      }
+      if (roomEntry.value.ownerId !== ownerId) {
+        return joinJson(
+          { error: "Only the owner can remove room members" },
+          403,
+        );
+      }
+      if (!memberEntry.value || !memberEntry.versionstamp) {
+        return joinJson({ error: "Room member not found" }, 404);
+      }
+      if (
+        memberId === roomEntry.value.ownerId ||
+        memberEntry.value.role === "owner"
+      ) {
+        return joinJson({ error: "The room owner cannot be removed" }, 409);
+      }
+
+      const timestamp = this.#now().toISOString();
+      const joinRequest: JoinRequest = {
+        roomId,
+        userId: memberId,
+        status: "removed",
+        requestedAt: requestEntry.value?.requestedAt ??
+          memberEntry.value.joinedAt,
+        reviewedAt: timestamp,
+        rejectedUntil: null,
+        emailNotifiedAt: requestEntry.value?.emailNotifiedAt ?? null,
+      };
+      if (
+        await this.#repository.removeMember(
+          joinRequest,
+          requestEntry.versionstamp,
+          memberEntry.versionstamp,
+          roomEntry.versionstamp,
+        )
+      ) {
+        return joinJson({
+          membership: {
+            userId: memberId,
+            status: "removed",
+            removedAt: timestamp,
+          },
+        });
+      }
+    }
+    return joinJson({ error: "Could not remove room member" }, 503);
   }
 
   async #reject(

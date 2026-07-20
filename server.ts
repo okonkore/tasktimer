@@ -108,7 +108,7 @@ export async function handleRequest(
   }
 
   if (
-    /^\/api\/chat\/rooms\/[A-Za-z0-9_-]{16,64}\/(?:requests(?:\/[A-Za-z0-9_-]{1,100}\/(?:approve|reject))?|members)$/
+    /^\/api\/chat\/rooms\/[A-Za-z0-9_-]{16,64}\/(?:requests(?:\/[A-Za-z0-9_-]{1,100}\/(?:approve|reject))?|members(?:\/[A-Za-z0-9_-]{1,100})?)$/
       .test(
         url.pathname,
       )

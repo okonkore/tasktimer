@@ -512,6 +512,57 @@ export class ChatRepository {
     return members;
   }
 
+  async updateMember(
+    member: Member,
+    expectedMemberVersionstamp: string,
+    expectedRoomVersionstamp: string,
+  ): Promise<boolean> {
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(member.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.member(member.roomId, member.userId),
+          versionstamp: expectedMemberVersionstamp,
+        },
+      )
+      .set(chatKeys.member(member.roomId, member.userId), member)
+      .commit();
+    return result.ok;
+  }
+
+  async removeMember(
+    request: JoinRequest,
+    expectedRequestVersionstamp: string | null,
+    expectedMemberVersionstamp: string,
+    expectedRoomVersionstamp: string,
+  ): Promise<boolean> {
+    const memberKey = chatKeys.member(request.roomId, request.userId);
+    const memberIndexKey = chatKeys.roomByMember(
+      request.userId,
+      request.roomId,
+    );
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(request.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.request(request.roomId, request.userId),
+          versionstamp: expectedRequestVersionstamp,
+        },
+        { key: memberKey, versionstamp: expectedMemberVersionstamp },
+      )
+      .set(chatKeys.request(request.roomId, request.userId), request)
+      .delete(memberKey)
+      .delete(memberIndexKey)
+      .commit();
+    return result.ok;
+  }
+
   async setJoinRequest(request: JoinRequest): Promise<void> {
     await this.kv.set(
       chatKeys.request(request.roomId, request.userId),
