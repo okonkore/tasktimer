@@ -274,6 +274,135 @@ a {
   font-size: 13px;
 }
 
+.room-description {
+  margin-bottom: 16px;
+}
+
+.chat-thread {
+  margin-top: 20px;
+  border: 1px solid #d9dfd5;
+  border-radius: 10px;
+  background: #f8faf7;
+}
+
+.message-scroll {
+  max-height: min(58dvh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+}
+
+.history-control {
+  display: grid;
+  justify-items: center;
+  min-height: 4px;
+  margin-bottom: 10px;
+}
+
+.history-button {
+  min-height: 38px;
+  padding: 7px 11px;
+  font-size: 13px;
+}
+
+.history-end,
+.empty-messages {
+  margin: 0;
+  color: #52615e;
+  font-size: 13px;
+  text-align: center;
+}
+
+.message-list {
+  display: grid;
+  gap: 9px;
+}
+
+.message-card {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid #d9dfd5;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.message-card.own-message {
+  border-color: #9accc7;
+  background: #f1faf8;
+}
+
+.message-card.redacted-message {
+  border-style: dashed;
+  background: #f5f5f3;
+}
+
+.message-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #273133;
+  font-size: 13px;
+}
+
+.message-meta time {
+  flex: 0 0 auto;
+  color: #64716e;
+  font-size: 12px;
+}
+
+.message-body {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.redacted-message .message-body {
+  color: #64716e;
+  font-style: italic;
+}
+
+.message-delete {
+  justify-self: end;
+  margin: 0;
+  color: #8f2828;
+  font-size: 13px;
+}
+
+.message-composer {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.message-composer textarea {
+  min-height: 88px;
+}
+
+.viewer-notice {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-left: 3px solid #9facaa;
+  background: #f2f4f2;
+}
+
+.share-details {
+  margin-top: 18px;
+}
+
+.share-details summary {
+  color: #11534f;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.share-details .share-box {
+  margin-top: 10px;
+}
+
 .member-list,
 .request-list {
   display: grid;
@@ -348,5 +477,16 @@ button.danger:hover {
   .resend-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .message-scroll {
+    max-height: 52dvh;
+    padding: 10px;
+  }
+
+  .message-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
 }

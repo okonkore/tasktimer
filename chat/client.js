@@ -601,7 +601,8 @@ async function loadRoom(roomId) {
 async function renderRoomPage(roomId) {
   clearRetryTimer();
   try {
-    if (!await requireChatUser()) return;
+    const currentUser = await requireChatUser();
+    if (!currentUser) return;
     const result = await loadRoom(roomId);
     if (!result) return;
     if (result.access) {
@@ -610,9 +611,21 @@ async function renderRoomPage(roomId) {
     }
     renderPanel(`
       <p class="eyebrow">チャットルーム</p><h1 id="chatTitle" data-room-name></h1>
-      <p class="lead" data-room-description></p>
-      <div class="share-box"><label for="shareUrl">共有URL</label><input id="shareUrl" type="text" readonly /></div>
+      <p class="lead room-description" data-room-description></p>
       <div class="actions" data-room-actions></div>
+      <section class="chat-thread" aria-label="メッセージ">
+        <div class="message-scroll" data-message-scroll tabindex="0">
+          <div class="history-control" data-history-control></div>
+          <p class="form-error" data-history-error role="alert" hidden></p>
+          <div class="message-list" data-message-list aria-live="polite" aria-relevant="additions text"></div>
+        </div>
+      </section>
+      <p class="form-error" data-message-error role="alert" hidden></p>
+      <div data-message-composer></div>
+      <details class="share-details">
+        <summary>共有URL</summary>
+        <div class="share-box"><label for="shareUrl">共有URL</label><input id="shareUrl" type="text" readonly /></div>
+      </details>
       <a class="back-link" href="/chat/">ルーム一覧へ戻る</a>`);
     app.querySelector("[data-room-name]").textContent = result.room.name;
     app.querySelector("[data-room-description]").textContent =
@@ -636,18 +649,350 @@ async function renderRoomPage(roomId) {
       ? "参加申請・メンバー管理"
       : "メンバー";
     actions.append(members);
-    const placeholder = document.createElement("p");
-    placeholder.className = "field-hint";
-    placeholder.textContent = result.membership.role === "viewer"
-      ? "あなたの権限は閲覧のみです。メッセージ機能は次の実装で追加されます。"
-      : "メッセージ機能は次の実装で追加されます。";
-    actions.after(placeholder);
+    const messageState = {
+      roomId,
+      currentUserId: currentUser.user.id,
+      isOwner: result.isOwner === true,
+      role: result.membership.role,
+      messages: [],
+      nextBefore: null,
+      loadingOlder: false,
+    };
+    renderMessageHistory(messageState);
+    renderMessageComposer(messageState);
+    await loadInitialMessages(messageState);
   } catch (requestError) {
     renderNotice(
       "ルーム",
       errorText(requestError),
       '<a class="back-link" href="/chat/">ルーム一覧へ戻る</a>',
     );
+  }
+}
+
+function messagePath(roomId) {
+  return `/api/chat/rooms/${encodeURIComponent(roomId)}/messages`;
+}
+
+function isMessagePage(value) {
+  return value && Array.isArray(value.messages) &&
+    (typeof value.nextBefore === "string" || value.nextBefore === null);
+}
+
+function validMessages(messages) {
+  return messages.filter((message) =>
+    message && typeof message.id === "string" &&
+    typeof message.authorId === "string" &&
+    typeof message.createdAt === "string" &&
+    (typeof message.body === "string" || message.body === null)
+  );
+}
+
+function mergeMessages(existing, additions) {
+  const messagesById = new Map(
+    existing.map((message) => [message.id, message]),
+  );
+  for (const message of additions) messagesById.set(message.id, message);
+  return [...messagesById.values()].sort((left, right) => {
+    const time = left.createdAt.localeCompare(right.createdAt);
+    return time === 0 ? left.id.localeCompare(right.id) : time;
+  });
+}
+
+async function loadInitialMessages(state) {
+  const list = app.querySelector("[data-message-list]");
+  list.textContent = "メッセージを読み込んでいます…";
+  const result = await requestJson(messagePath(state.roomId), "GET");
+  if (result.response.status === 401) {
+    navigate(loginUrl(currentReturnTo()));
+    return;
+  }
+  if (result.response.status === 403) {
+    await renderRoomPage(state.roomId);
+    return;
+  }
+  if (!result.response.ok || !isMessagePage(result.body)) {
+    throw new Error(
+      apiError(result.body, "メッセージを読み込めませんでした。"),
+    );
+  }
+  state.messages = mergeMessages([], validMessages(result.body.messages));
+  state.nextBefore = result.body.nextBefore;
+  renderMessageHistory(state);
+  const scroll = app.querySelector("[data-message-scroll]");
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+function renderMessageHistory(state) {
+  const list = app.querySelector("[data-message-list]");
+  const historyControl = app.querySelector("[data-history-control]");
+  const historyError = app.querySelector("[data-history-error]");
+  list.replaceChildren();
+  historyControl.replaceChildren();
+  historyError.hidden = true;
+  if (state.nextBefore) {
+    const older = document.createElement("button");
+    older.type = "button";
+    older.className = "secondary history-button";
+    older.textContent = state.loadingOlder
+      ? "読み込み中…"
+      : "過去のメッセージを読み込む";
+    older.disabled = state.loadingOlder;
+    older.addEventListener("click", () => void loadOlderMessages(state));
+    historyControl.append(older);
+  } else if (state.messages.length > 0) {
+    const end = document.createElement("p");
+    end.className = "history-end";
+    end.textContent = "これより前のメッセージはありません。";
+    historyControl.append(end);
+  }
+  if (state.messages.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-messages";
+    empty.textContent = "まだメッセージはありません。";
+    list.append(empty);
+    return;
+  }
+  for (const message of state.messages) {
+    list.append(createMessageCard(message, state));
+  }
+}
+
+async function loadOlderMessages(state) {
+  if (!state.nextBefore || state.loadingOlder) return;
+  const scroll = app.querySelector("[data-message-scroll]");
+  const previousTop = scroll.scrollTop;
+  const previousHeight = scroll.scrollHeight;
+  state.loadingOlder = true;
+  renderMessageHistory(state);
+  try {
+    const result = await requestJson(
+      `${messagePath(state.roomId)}?before=${
+        encodeURIComponent(state.nextBefore)
+      }`,
+      "GET",
+    );
+    if (result.response.status === 401) {
+      navigate(loginUrl(currentReturnTo()));
+      return;
+    }
+    if (result.response.status === 403) {
+      await renderRoomPage(state.roomId);
+      return;
+    }
+    if (!result.response.ok || !isMessagePage(result.body)) {
+      throw new Error(
+        apiError(result.body, "過去のメッセージを読み込めませんでした。"),
+      );
+    }
+    state.messages = mergeMessages(
+      state.messages,
+      validMessages(result.body.messages),
+    );
+    state.nextBefore = result.body.nextBefore;
+    state.loadingOlder = false;
+    renderMessageHistory(state);
+    scroll.scrollTop = previousTop + (scroll.scrollHeight - previousHeight);
+  } catch (requestError) {
+    state.loadingOlder = false;
+    renderMessageHistory(state);
+    const historyError = app.querySelector("[data-history-error]");
+    historyError.textContent = errorText(requestError);
+    historyError.hidden = false;
+  }
+}
+
+function messageDateLabel(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "日時不明"
+    : date.toLocaleString("ja-JP");
+}
+
+function createMessageCard(message, state) {
+  const card = document.createElement("article");
+  card.className = "message-card";
+  if (message.authorId === state.currentUserId) {
+    card.classList.add("own-message");
+  }
+  if (message.body === null) card.classList.add("redacted-message");
+  const header = document.createElement("div");
+  header.className = "message-meta";
+  const author = document.createElement("strong");
+  author.textContent = message.authorDisplayName || "退会したユーザー";
+  const time = document.createElement("time");
+  time.dateTime = message.createdAt;
+  time.textContent = messageDateLabel(message.createdAt);
+  header.append(author, time);
+  const body = document.createElement("p");
+  body.className = "message-body";
+  body.textContent = message.body === null
+    ? "削除されたメッセージ"
+    : message.body;
+  card.append(header, body);
+  if (canDeleteMessage(message, state)) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button message-delete";
+    remove.textContent = "削除";
+    remove.addEventListener(
+      "click",
+      () => void deleteMessage(message, state, remove),
+    );
+    card.append(remove);
+  }
+  return card;
+}
+
+function canDeleteMessage(message, state) {
+  if (message.body === null) return false;
+  return state.isOwner ||
+    (state.role === "writer" && message.authorId === state.currentUserId);
+}
+
+async function deleteMessage(message, state, button) {
+  if (!confirm("このメッセージを削除しますか？ 削除後は元に戻せません。")) {
+    return;
+  }
+  const pageError = app.querySelector("[data-message-error]");
+  pageError.hidden = true;
+  button.disabled = true;
+  button.textContent = "削除中…";
+  try {
+    const result = await requestJson(
+      `${messagePath(state.roomId)}/${encodeURIComponent(message.id)}`,
+      "DELETE",
+      undefined,
+      true,
+    );
+    if (result.response.status === 401) {
+      navigate(loginUrl(currentReturnTo()));
+      return;
+    }
+    if (result.response.status === 403) {
+      await renderRoomPage(state.roomId);
+      return;
+    }
+    if (!result.response.ok || !result.body?.message) {
+      throw new Error(
+        apiError(result.body, "メッセージを削除できませんでした。"),
+      );
+    }
+    const redacted = {
+      ...result.body.message,
+      authorDisplayName: result.body.message.authorDisplayName ??
+        message.authorDisplayName,
+    };
+    state.messages = mergeMessages(
+      state.messages.filter((item) => item.id !== message.id),
+      validMessages([redacted]),
+    );
+    renderMessageHistory(state);
+  } catch (requestError) {
+    pageError.textContent = errorText(requestError);
+    pageError.hidden = false;
+    button.disabled = false;
+    button.textContent = "削除";
+  }
+}
+
+function renderMessageComposer(state) {
+  const container = app.querySelector("[data-message-composer]");
+  container.replaceChildren();
+  if (state.role !== "owner" && state.role !== "writer") {
+    const viewerNotice = document.createElement("p");
+    viewerNotice.className = "field-hint viewer-notice";
+    viewerNotice.textContent =
+      "あなたの権限は閲覧のみです。メッセージは投稿できません。";
+    container.append(viewerNotice);
+    return;
+  }
+  const form = document.createElement("form");
+  form.className = "message-composer";
+  form.noValidate = true;
+  const label = document.createElement("label");
+  label.htmlFor = "messageBody";
+  label.textContent = "メッセージ";
+  const textarea = document.createElement("textarea");
+  textarea.id = "messageBody";
+  textarea.name = "body";
+  textarea.rows = 3;
+  textarea.maxLength = 2000;
+  textarea.required = true;
+  textarea.placeholder = "メッセージを入力";
+  textarea.setAttribute("aria-describedby", "messageHint messageComposeError");
+  const hint = document.createElement("p");
+  hint.id = "messageHint";
+  hint.className = "field-hint";
+  hint.textContent = "Enterで送信、Shift+Enterで改行します。最大2,000文字。";
+  const error = document.createElement("p");
+  error.id = "messageComposeError";
+  error.className = "form-error";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.textContent = "送信";
+  form.append(label, textarea, hint, error, send);
+  container.append(form);
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitMessage(state, textarea, send, error);
+  });
+}
+
+async function submitMessage(state, textarea, send, error) {
+  const body = textarea.value;
+  if (!body.trim() || Array.from(body).length > 2000) {
+    error.textContent =
+      "空白だけでない1〜2,000文字のメッセージを入力してください。";
+    error.hidden = false;
+    return;
+  }
+  error.hidden = true;
+  send.disabled = textarea.disabled = true;
+  send.textContent = "送信中…";
+  try {
+    const result = await requestJson(messagePath(state.roomId), "POST", {
+      body,
+    }, true);
+    if (result.response.status === 401) {
+      navigate(loginUrl(currentReturnTo()));
+      return;
+    }
+    if (result.response.status === 403) {
+      await renderRoomPage(state.roomId);
+      return;
+    }
+    if (result.response.status !== 201 || !result.body?.message) {
+      throw new Error(
+        apiError(result.body, "メッセージを送信できませんでした。"),
+      );
+    }
+    state.messages = mergeMessages(
+      state.messages,
+      validMessages([result.body.message]),
+    );
+    textarea.value = "";
+    renderMessageHistory(state);
+    const scroll = app.querySelector("[data-message-scroll]");
+    scroll.scrollTop = scroll.scrollHeight;
+    send.disabled = textarea.disabled = false;
+    send.textContent = "送信";
+    textarea.focus();
+  } catch (requestError) {
+    error.textContent = `${
+      errorText(requestError)
+    } 入力内容は残っています。再送してください。`;
+    error.hidden = false;
+    send.disabled = textarea.disabled = false;
+    send.textContent = "再送";
   }
 }
 
