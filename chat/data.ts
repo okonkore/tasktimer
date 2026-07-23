@@ -96,6 +96,30 @@ export interface Notification {
   dedupeKey: string | null;
 }
 
+export type ChatEventType =
+  | "message-created"
+  | "message-deleted"
+  | "join-requested"
+  | "join-approved"
+  | "join-rejected"
+  | "permission-changed"
+  | "member-removed";
+
+export type ChatEventAudience = "room-members" | "room-owner" | "user";
+
+export interface ChatEvent {
+  id: string;
+  type: ChatEventType;
+  audience: ChatEventAudience;
+  roomId: string;
+  actorId: string;
+  targetUserId: string | null;
+  createdAt: IsoDateTime;
+  payload: Record<string, unknown>;
+}
+
+export type ChatEventDraft = Omit<ChatEvent, "id">;
+
 export interface RateLimitWindow {
   count: number;
   windowStartedAt: IsoDateTime;
@@ -176,6 +200,12 @@ export const chatKeys = Object.freeze({
     "notifications",
     userId,
     notificationId,
+  ],
+  eventSequence: (): Deno.KvKey => [...chatPrefix, "eventSequence"],
+  event: (eventId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "events",
+    eventId,
   ],
   rateLimit: (
     category: string,
@@ -517,8 +547,9 @@ export class ChatRepository {
     member: Member,
     expectedMemberVersionstamp: string,
     expectedRoomVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(member.roomId),
@@ -529,8 +560,9 @@ export class ChatRepository {
           versionstamp: expectedMemberVersionstamp,
         },
       )
-      .set(chatKeys.member(member.roomId, member.userId), member)
-      .commit();
+      .set(chatKeys.member(member.roomId, member.userId), member);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -539,13 +571,14 @@ export class ChatRepository {
     expectedRequestVersionstamp: string | null,
     expectedMemberVersionstamp: string,
     expectedRoomVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
     const memberKey = chatKeys.member(request.roomId, request.userId);
     const memberIndexKey = chatKeys.roomByMember(
       request.userId,
       request.roomId,
     );
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(request.roomId),
@@ -559,8 +592,9 @@ export class ChatRepository {
       )
       .set(chatKeys.request(request.roomId, request.userId), request)
       .delete(memberKey)
-      .delete(memberIndexKey)
-      .commit();
+      .delete(memberIndexKey);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -610,8 +644,9 @@ export class ChatRepository {
     expectedRequestVersionstamp: string | null,
     expectedMemberVersionstamp: string | null,
     expectedRoomVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(request.roomId),
@@ -626,8 +661,9 @@ export class ChatRepository {
           versionstamp: expectedMemberVersionstamp,
         },
       )
-      .set(chatKeys.request(request.roomId, request.userId), request)
-      .commit();
+      .set(chatKeys.request(request.roomId, request.userId), request);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -636,10 +672,11 @@ export class ChatRepository {
     member: Member,
     expectedRequestVersionstamp: string,
     expectedRoomVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
     const memberKey = chatKeys.member(member.roomId, member.userId);
     const memberIndexKey = chatKeys.roomByMember(member.userId, member.roomId);
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(request.roomId),
@@ -654,8 +691,9 @@ export class ChatRepository {
       )
       .set(chatKeys.request(request.roomId, request.userId), request)
       .set(memberKey, member)
-      .set(memberIndexKey, member.roomId)
-      .commit();
+      .set(memberIndexKey, member.roomId);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -663,8 +701,9 @@ export class ChatRepository {
     request: JoinRequest,
     expectedRequestVersionstamp: string,
     expectedRoomVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(request.roomId),
@@ -679,8 +718,9 @@ export class ChatRepository {
           versionstamp: null,
         },
       )
-      .set(chatKeys.request(request.roomId, request.userId), request)
-      .commit();
+      .set(chatKeys.request(request.roomId, request.userId), request);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -692,9 +732,10 @@ export class ChatRepository {
     message: Message,
     expectedRoomVersionstamp: string,
     expectedMemberVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
     const messageKey = chatKeys.message(message.roomId, message.id);
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(message.roomId),
@@ -706,8 +747,9 @@ export class ChatRepository {
         },
         { key: messageKey, versionstamp: null },
       )
-      .set(messageKey, message)
-      .commit();
+      .set(messageKey, message);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -729,8 +771,9 @@ export class ChatRepository {
     expectedMessageVersionstamp: string,
     expectedRoomVersionstamp: string,
     expectedMemberVersionstamp: string,
+    event?: ChatEventDraft,
   ): Promise<boolean> {
-    const result = await this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.room(message.roomId),
@@ -745,8 +788,9 @@ export class ChatRepository {
           versionstamp: expectedMessageVersionstamp,
         },
       )
-      .set(chatKeys.message(message.roomId, message.id), message)
-      .commit();
+      .set(chatKeys.message(message.roomId, message.id), message);
+    operation = (await this.#appendEvent(operation, event)).operation;
+    const result = await operation.commit();
     return result.ok;
   }
 
@@ -819,5 +863,53 @@ export class ChatRepository {
     await this.kv.set(chatKeys.rateLimit(category, subject, window), value, {
       expireIn: Math.max(1, new Date(value.expiresAt).getTime() - Date.now()),
     });
+  }
+
+  async listEventsAfter(
+    eventId: string,
+    limit = chatLimits.maxPageSize,
+  ): Promise<ChatEvent[]> {
+    const events: ChatEvent[] = [];
+    const entries = this.kv.list<ChatEvent>({
+      prefix: ["chat", "events"],
+      start: chatKeys.event(eventId),
+    }, { limit: Math.max(1, Math.floor(limit)) + 1 });
+    for await (const entry of entries) {
+      if (entry.value.id > eventId) events.push(entry.value);
+      if (events.length >= limit) break;
+    }
+    return events;
+  }
+
+  async getLatestEventId(): Promise<string> {
+    const sequence = (await this.kv.get<Deno.KvU64>(
+      chatKeys.eventSequence(),
+    )).value?.value ?? 0n;
+    return sequence.toString().padStart(20, "0");
+  }
+
+  async #appendEvent(
+    operation: Deno.AtomicOperation,
+    event?: ChatEventDraft,
+  ): Promise<{ operation: Deno.AtomicOperation }> {
+    if (!event) return { operation };
+    const sequenceKey = chatKeys.eventSequence();
+    const sequenceEntry = await this.kv.get<Deno.KvU64>(sequenceKey);
+    const current = sequenceEntry.value?.value ?? 0n;
+    const next = current + 1n;
+    if (next > 99_999_999_999_999_999_999n) {
+      throw new RangeError("Chat event sequence is exhausted");
+    }
+    const persisted: ChatEvent = {
+      ...event,
+      id: next.toString().padStart(20, "0"),
+    };
+    return {
+      operation: operation
+        .check({ key: sequenceKey, versionstamp: sequenceEntry.versionstamp })
+        .set(sequenceKey, new Deno.KvU64(next))
+        .check({ key: chatKeys.event(persisted.id), versionstamp: null })
+        .set(chatKeys.event(persisted.id), persisted),
+    };
   }
 }

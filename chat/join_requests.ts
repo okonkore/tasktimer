@@ -1,4 +1,5 @@
 import {
+  type ChatEventDraft,
   ChatRepository,
   type JoinRequest,
   type Member,
@@ -203,12 +204,22 @@ export class ChatJoinRequestService {
         rejectedUntil: null,
         emailNotifiedAt: null,
       };
+      const event: ChatEventDraft = {
+        type: "join-requested",
+        audience: "room-owner",
+        roomId,
+        actorId: userId,
+        targetUserId: roomEntry.value.ownerId,
+        createdAt: timestamp,
+        payload: { applicantId: userId, requestedAt: timestamp },
+      };
       if (
         await this.#repository.replaceJoinRequest(
           joinRequest,
           requestEntry.versionstamp,
           memberEntry.versionstamp,
           roomEntry.versionstamp,
+          event,
         )
       ) {
         return joinJson({ request: publicJoinRequest(joinRequest) }, 201);
@@ -308,12 +319,22 @@ export class ChatJoinRequestService {
         joinedAt: timestamp,
         updatedAt: timestamp,
       };
+      const event: ChatEventDraft = {
+        type: "join-approved",
+        audience: "user",
+        roomId,
+        actorId: ownerId,
+        targetUserId: applicantId,
+        createdAt: timestamp,
+        payload: { role, visibleFrom: timestamp },
+      };
       if (
         await this.#repository.approveJoinRequest(
           joinRequest,
           member,
           requestEntry.versionstamp,
           roomEntry.versionstamp,
+          event,
         )
       ) {
         return joinJson({
@@ -359,16 +380,27 @@ export class ChatJoinRequestService {
         return joinJson({ error: "The owner role cannot be changed" }, 409);
       }
 
+      const timestamp = this.#now().toISOString();
       const member: Member = {
         ...memberEntry.value,
         role,
-        updatedAt: this.#now().toISOString(),
+        updatedAt: timestamp,
+      };
+      const event: ChatEventDraft = {
+        type: "permission-changed",
+        audience: "user",
+        roomId,
+        actorId: ownerId,
+        targetUserId: memberId,
+        createdAt: timestamp,
+        payload: { role },
       };
       if (
         await this.#repository.updateMember(
           member,
           memberEntry.versionstamp,
           roomEntry.versionstamp,
+          event,
         )
       ) {
         return joinJson({
@@ -425,12 +457,22 @@ export class ChatJoinRequestService {
         rejectedUntil: null,
         emailNotifiedAt: requestEntry.value?.emailNotifiedAt ?? null,
       };
+      const event: ChatEventDraft = {
+        type: "member-removed",
+        audience: "user",
+        roomId,
+        actorId: ownerId,
+        targetUserId: memberId,
+        createdAt: timestamp,
+        payload: { removedAt: timestamp },
+      };
       if (
         await this.#repository.removeMember(
           joinRequest,
           requestEntry.versionstamp,
           memberEntry.versionstamp,
           roomEntry.versionstamp,
+          event,
         )
       ) {
         return joinJson({
@@ -482,11 +524,23 @@ export class ChatJoinRequestService {
         reviewedAt: now.toISOString(),
         rejectedUntil: rejectedUntil.toISOString(),
       };
+      const event: ChatEventDraft = {
+        type: "join-rejected",
+        audience: "user",
+        roomId,
+        actorId: ownerId,
+        targetUserId: applicantId,
+        createdAt: now.toISOString(),
+        payload: {
+          rejectedUntil: rejectedUntil.toISOString(),
+        },
+      };
       if (
         await this.#repository.rejectJoinRequest(
           joinRequest,
           requestEntry.versionstamp,
           roomEntry.versionstamp,
+          event,
         )
       ) {
         return joinJson({ request: publicJoinRequest(joinRequest) });

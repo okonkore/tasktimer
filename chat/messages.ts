@@ -1,4 +1,5 @@
 import {
+  type ChatEventDraft,
   chatLimits,
   ChatRepository,
   createSortableId,
@@ -177,11 +178,26 @@ export class ChatMessageService {
         deletedAt: null,
         deletedBy: null,
       };
+      const event: ChatEventDraft = {
+        type: "message-created",
+        audience: "room-members",
+        roomId,
+        actorId: userId,
+        targetUserId: null,
+        createdAt: message.createdAt,
+        payload: {
+          messageId: message.id,
+          authorId: message.authorId,
+          body: message.body,
+          createdAt: message.createdAt,
+        },
+      };
       if (
         await this.#repository.createMessage(
           message,
           roomEntry.versionstamp,
           memberEntry.versionstamp,
+          event,
         )
       ) {
         const user = await this.#repository.getUser(userId);
@@ -232,11 +248,25 @@ export class ChatMessageService {
         });
       }
 
+      const deletedAt = this.#now().toISOString();
       const deleted: Message = {
         ...message,
         body: null,
-        deletedAt: this.#now().toISOString(),
+        deletedAt,
         deletedBy: userId,
+      };
+      const event: ChatEventDraft = {
+        type: "message-deleted",
+        audience: "room-members",
+        roomId,
+        actorId: userId,
+        targetUserId: null,
+        createdAt: deletedAt,
+        payload: {
+          messageId: deleted.id,
+          deletedAt: deleted.deletedAt,
+          deletedBy: deleted.deletedBy,
+        },
       };
       if (
         await this.#repository.redactMessage(
@@ -245,6 +275,7 @@ export class ChatMessageService {
           messageEntry.versionstamp,
           roomEntry.versionstamp,
           memberEntry.versionstamp,
+          event,
         )
       ) {
         return messageJson({ message: publicMessage(deleted, null) });

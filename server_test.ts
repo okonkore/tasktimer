@@ -151,3 +151,21 @@ Deno.test("chat message API routes use the configured handler", async () => {
     "all message routes should be delegated",
   );
 });
+
+Deno.test("chat event route uses the configured SSE handler", async () => {
+  const handledPaths: string[] = [];
+  const response = await handleRequest(
+    new Request("http://localhost/api/chat/events"),
+    {
+      chatEventHandler: (request) => {
+        handledPaths.push(new URL(request.url).pathname);
+        return Promise.resolve(new Response("stream", { status: 202 }));
+      },
+    },
+  );
+  assert(response.status === 202, "event handler response should be returned");
+  assert(
+    handledPaths.length === 1 && handledPaths[0] === "/api/chat/events",
+    "event route should be delegated exactly once",
+  );
+});
