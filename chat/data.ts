@@ -107,6 +107,7 @@ export const chatLimits = Object.freeze({
   maxRoomMembers: 100,
   defaultPageSize: 50,
   maxPageSize: 100,
+  maxMessageLength: 2_000,
 });
 
 export function normalizeEmail(email: string): string {
@@ -687,9 +688,66 @@ export class ChatRepository {
     await this.kv.set(chatKeys.message(message.roomId, message.id), message);
   }
 
+  async createMessage(
+    message: Message,
+    expectedRoomVersionstamp: string,
+    expectedMemberVersionstamp: string,
+  ): Promise<boolean> {
+    const messageKey = chatKeys.message(message.roomId, message.id);
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(message.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.member(message.roomId, message.authorId),
+          versionstamp: expectedMemberVersionstamp,
+        },
+        { key: messageKey, versionstamp: null },
+      )
+      .set(messageKey, message)
+      .commit();
+    return result.ok;
+  }
+
   async getMessage(roomId: string, messageId: string): Promise<Message | null> {
     return (await this.kv.get<Message>(chatKeys.message(roomId, messageId)))
       .value;
+  }
+
+  async getMessageEntry(
+    roomId: string,
+    messageId: string,
+  ): Promise<Deno.KvEntryMaybe<Message>> {
+    return await this.kv.get<Message>(chatKeys.message(roomId, messageId));
+  }
+
+  async redactMessage(
+    message: Message,
+    actorId: string,
+    expectedMessageVersionstamp: string,
+    expectedRoomVersionstamp: string,
+    expectedMemberVersionstamp: string,
+  ): Promise<boolean> {
+    const result = await this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(message.roomId),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.member(message.roomId, actorId),
+          versionstamp: expectedMemberVersionstamp,
+        },
+        {
+          key: chatKeys.message(message.roomId, message.id),
+          versionstamp: expectedMessageVersionstamp,
+        },
+      )
+      .set(chatKeys.message(message.roomId, message.id), message)
+      .commit();
+    return result.ok;
   }
 
   async listMessages(
@@ -707,15 +765,25 @@ export class ChatRepository {
       end: [...prefix, endId],
     };
 
-    const messages: Message[] = [];
+    const limit = pageSize(options.limit);
+    const candidates: Message[] = [];
     const entries = this.kv.list<Message>(selector, {
-      limit: pageSize(options.limit),
+      limit: limit + 1,
       reverse: true,
     });
-    for await (const entry of entries) messages.push(entry.value);
+    for await (const entry of entries) {
+      if (
+        !options.visibleFrom ||
+        entry.value.createdAt >= options.visibleFrom
+      ) {
+        candidates.push(entry.value);
+      }
+    }
+    const hasMore = candidates.length > limit;
+    const messages = candidates.slice(0, limit);
     return {
       messages,
-      nextBefore: messages.at(-1)?.id ?? null,
+      nextBefore: hasMore ? messages.at(-1)?.id ?? null : null,
     };
   }
 

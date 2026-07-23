@@ -13,6 +13,10 @@ import {
   ChatJoinRequestService,
   createChatJoinRequestHandler,
 } from "./chat/join_requests.ts";
+import {
+  ChatMessageService,
+  createChatMessageHandler,
+} from "./chat/messages.ts";
 
 const kv = await Deno.openKv();
 
@@ -68,6 +72,7 @@ export interface RequestDependencies {
   chatAuthHandler?: (request: Request) => Promise<Response>;
   chatRoomHandler?: (request: Request) => Promise<Response>;
   chatJoinRequestHandler?: (request: Request) => Promise<Response>;
+  chatMessageHandler?: (request: Request) => Promise<Response>;
 }
 
 export async function handleRequest(
@@ -117,6 +122,14 @@ export async function handleRequest(
       dependencies.chatJoinRequestHandler ??
         handleProductionChatJoinRequests
     )(request);
+  }
+
+  if (
+    /^\/api\/chat\/rooms\/[A-Za-z0-9_-]{16,64}\/messages(?:\/[0-9A-HJKMNP-TV-Z]{26})?$/
+      .test(url.pathname)
+  ) {
+    return await (dependencies.chatMessageHandler ??
+      handleProductionChatMessages)(request);
   }
 
   if (url.pathname.startsWith("/api/chat/")) {
@@ -180,6 +193,9 @@ let productionChatRoomHandler:
 let productionChatJoinRequestHandler:
   | ((request: Request) => Promise<Response>)
   | null = null;
+let productionChatMessageHandler:
+  | ((request: Request) => Promise<Response>)
+  | null = null;
 
 async function handleProductionChatAuth(request: Request): Promise<Response> {
   try {
@@ -221,10 +237,26 @@ async function handleProductionChatJoinRequests(
   }
 }
 
+async function handleProductionChatMessages(
+  request: Request,
+): Promise<Response> {
+  try {
+    initializeProductionChatHandlers();
+    if (!productionChatMessageHandler) {
+      throw new Error("Message handler unavailable");
+    }
+    return await productionChatMessageHandler(request);
+  } catch {
+    return jsonResponse({ error: "Chat is not configured" }, 503, {
+      "cache-control": "no-store",
+    });
+  }
+}
+
 function initializeProductionChatHandlers(): void {
   if (
     productionChatAuthHandler && productionChatRoomHandler &&
-    productionChatJoinRequestHandler
+    productionChatJoinRequestHandler && productionChatMessageHandler
   ) return;
   const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
   const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
@@ -256,6 +288,12 @@ function initializeProductionChatHandlers(): void {
   );
   productionChatJoinRequestHandler = createChatJoinRequestHandler(
     new ChatJoinRequestService({
+      repository,
+      sessions: sessionService,
+    }),
+  );
+  productionChatMessageHandler = createChatMessageHandler(
+    new ChatMessageService({
       repository,
       sessions: sessionService,
     }),
