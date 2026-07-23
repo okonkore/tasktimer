@@ -1,6 +1,9 @@
 const app = document.querySelector("#chatApp");
 const apiOrigin = globalThis.location.origin;
 let retryTimer = null;
+let eventSource = null;
+let activePageCleanup = null;
+const seenEventIds = new Set();
 
 function apiError(body, fallback) {
   return body && typeof body.error === "string" ? body.error : fallback;
@@ -88,11 +91,107 @@ async function requestJson(path, method, body, includeCsrf = false) {
 }
 
 function renderPanel(content) {
+  clearActivePageSubscription();
   app.innerHTML = `
     <section class="chat-panel" aria-labelledby="chatTitle">
       <p class="eyebrow">Paradise Timer</p>
       ${content}
     </section>`;
+}
+
+function clearActivePageSubscription() {
+  if (activePageCleanup) {
+    activePageCleanup();
+    activePageCleanup = null;
+  }
+}
+
+function ensureRealtimeEvents() {
+  if (eventSource || typeof EventSource !== "function") return;
+  eventSource = new EventSource("/api/chat/events");
+  for (
+    const type of [
+      "message-created",
+      "message-deleted",
+      "join-requested",
+      "join-approved",
+      "join-rejected",
+      "permission-changed",
+      "member-removed",
+    ]
+  ) {
+    eventSource.addEventListener(type, (event) => handleRealtimeEvent(event));
+  }
+  eventSource.addEventListener("error", () => {
+    // EventSource reconnects with the server-provided retry delay and resumes
+    // with Last-Event-ID automatically. Keep the source alive for that path.
+  });
+}
+
+function stopRealtimeEvents() {
+  if (eventSource) eventSource.close();
+  eventSource = null;
+  seenEventIds.clear();
+}
+
+function handleRealtimeEvent(event) {
+  if (event.lastEventId && seenEventIds.has(event.lastEventId)) return;
+  if (event.lastEventId) {
+    seenEventIds.add(event.lastEventId);
+    if (seenEventIds.size > 256) {
+      seenEventIds.delete(seenEventIds.values().next().value);
+    }
+  }
+  let payload;
+  try {
+    payload = JSON.parse(event.data);
+  } catch {
+    return;
+  }
+  if (
+    !payload || typeof payload.type !== "string" ||
+    typeof payload.roomId !== "string"
+  ) return;
+  showRealtimeNotification(payload.type);
+  void refreshDashboardBadges();
+  globalThis.dispatchEvent(
+    new CustomEvent("chat-realtime", { detail: payload }),
+  );
+
+  const currentRoom = globalThis.location.pathname.match(
+    /^\/chat\/rooms\/([A-Za-z0-9_-]{16,64})$/,
+  );
+  if (
+    currentRoom && currentRoom[1] === payload.roomId &&
+    ["join-approved", "join-rejected", "permission-changed", "member-removed"]
+      .includes(payload.type)
+  ) {
+    void renderRoomPage(payload.roomId);
+  }
+}
+
+function showRealtimeNotification(type) {
+  const messages = {
+    "join-requested": "ルームに新しい参加申請が届きました。",
+    "join-approved": "参加申請が承認されました。",
+    "join-rejected": "参加申請が拒否されました。",
+    "permission-changed": "ルームでの権限が変更されました。",
+    "member-removed": "ルームへの参加が解除されました。",
+  };
+  if (!messages[type]) return;
+  let container = document.querySelector("#chatNotifications");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "chatNotifications";
+    container.className = "chat-notifications";
+    container.setAttribute("aria-live", "polite");
+    document.body.append(container);
+  }
+  const notice = document.createElement("p");
+  notice.className = "chat-notification";
+  notice.textContent = messages[type];
+  container.append(notice);
+  globalThis.setTimeout(() => notice.remove(), 8_000);
 }
 
 function renderNotice(title, message, actions = "") {
@@ -394,6 +493,7 @@ async function renderChatHome() {
       navigate("/chat/profile?setup=1&returnTo=%2Fchat%2F");
       return;
     }
+    ensureRealtimeEvents();
     await renderDashboard();
   } catch (requestError) {
     renderNotice(
@@ -416,6 +516,7 @@ async function requireChatUser() {
     );
     return null;
   }
+  ensureRealtimeEvents();
   return current;
 }
 
@@ -428,6 +529,7 @@ function addDashboardActions() {
       if (!result.response.ok) {
         throw new Error(apiError(result.body, "ログアウトできませんでした。"));
       }
+      stopRealtimeEvents();
       navigate("/chat/");
     } catch (requestError) {
       logout.disabled = false;
@@ -473,6 +575,7 @@ async function renderDashboard() {
       result.body.joinedRooms,
       "参加しているルームはありません。",
     );
+    await refreshDashboardBadges();
   } catch (requestError) {
     renderNotice(
       "チャット",
@@ -511,9 +614,45 @@ function renderRoomList(container, rooms, emptyMessage) {
       : room.role === "writer"
       ? "書き込み可"
       : "閲覧のみ";
-    link.append(name, description, role);
+    const badges = document.createElement("span");
+    badges.className = "room-badges";
+    badges.dataset.roomBadges = room.id;
+    link.dataset.roomId = room.id;
+    link.append(name, description, role, badges);
     container.append(link);
   }
+}
+
+async function refreshDashboardBadges() {
+  const roomCards = app.querySelectorAll("[data-room-id]");
+  if (roomCards.length === 0) return;
+  try {
+    const result = await requestJson("/api/chat/notifications", "GET");
+    if (!result.response.ok || !Array.isArray(result.body?.rooms)) return;
+    const summaries = new Map(
+      result.body.rooms.filter((room) =>
+        room && typeof room.roomId === "string"
+      ).map((room) => [room.roomId, room]),
+    );
+    for (const card of roomCards) {
+      const badges = card.querySelector("[data-room-badges]");
+      const summary = summaries.get(card.dataset.roomId);
+      if (!badges || !summary) continue;
+      badges.replaceChildren();
+      addRoomBadge(badges, summary.unreadCount, "未読");
+      addRoomBadge(badges, summary.pendingRequestCount, "申請");
+    }
+  } catch {
+    // The dashboard itself remains usable if a background badge refresh fails.
+  }
+}
+
+function addRoomBadge(container, value, label) {
+  if (!Number.isInteger(value) || value < 1) return;
+  const badge = document.createElement("span");
+  badge.className = "room-badge";
+  badge.textContent = `${label} ${value > 99 ? "99+" : value}`;
+  container.append(badge);
 }
 
 async function renderRoomCreate() {
@@ -661,6 +800,19 @@ async function renderRoomPage(roomId) {
     renderMessageHistory(messageState);
     renderMessageComposer(messageState);
     await loadInitialMessages(messageState);
+    const onRealtimeEvent = (event) => {
+      const realtime = event.detail;
+      if (realtime?.roomId !== roomId) return;
+      if (
+        realtime.type === "message-created" ||
+        realtime.type === "message-deleted"
+      ) {
+        void refreshLatestMessages(messageState);
+      }
+    };
+    globalThis.addEventListener("chat-realtime", onRealtimeEvent);
+    activePageCleanup = () =>
+      globalThis.removeEventListener("chat-realtime", onRealtimeEvent);
   } catch (requestError) {
     renderNotice(
       "ルーム",
@@ -672,6 +824,52 @@ async function renderRoomPage(roomId) {
 
 function messagePath(roomId) {
   return `/api/chat/rooms/${encodeURIComponent(roomId)}/messages`;
+}
+
+function readPositionPath(roomId) {
+  return `/api/chat/rooms/${encodeURIComponent(roomId)}/read-position`;
+}
+
+async function markRoomRead(state) {
+  const lastMessage = state.messages.at(-1);
+  if (!lastMessage?.id) return;
+  try {
+    await requestJson(readPositionPath(state.roomId), "POST", {
+      messageId: lastMessage.id,
+    }, true);
+  } catch {
+    // A later read, refresh, or reconnect retries this non-destructive update.
+  }
+}
+
+async function refreshLatestMessages(state) {
+  const scroll = app.querySelector("[data-message-scroll]");
+  const nearBottom =
+    scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 48;
+  try {
+    const result = await requestJson(messagePath(state.roomId), "GET");
+    if (result.response.status === 401) {
+      navigate(loginUrl(currentReturnTo()));
+      return;
+    }
+    if (result.response.status === 403) {
+      await renderRoomPage(state.roomId);
+      return;
+    }
+    if (!result.response.ok || !isMessagePage(result.body)) return;
+    state.messages = mergeMessages(
+      state.messages,
+      validMessages(result.body.messages),
+    );
+    state.nextBefore = state.nextBefore ?? result.body.nextBefore;
+    renderMessageHistory(state);
+    if (nearBottom) {
+      scroll.scrollTop = scroll.scrollHeight;
+      await markRoomRead(state);
+    }
+  } catch {
+    // SSE is advisory; normal history loading remains available after a retry.
+  }
 }
 
 function isMessagePage(value) {
@@ -721,6 +919,7 @@ async function loadInitialMessages(state) {
   renderMessageHistory(state);
   const scroll = app.querySelector("[data-message-scroll]");
   scroll.scrollTop = scroll.scrollHeight;
+  await markRoomRead(state);
 }
 
 function renderMessageHistory(state) {
@@ -979,6 +1178,7 @@ async function submitMessage(state, textarea, send, error) {
       state.messages,
       validMessages([result.body.message]),
     );
+    await markRoomRead(state);
     textarea.value = "";
     renderMessageHistory(state);
     const scroll = app.querySelector("[data-message-scroll]");

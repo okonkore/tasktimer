@@ -463,6 +463,44 @@ button.danger:hover {
   background: #ffe4e4;
 }
 
+.room-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.room-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #304b48;
+  background: #deece8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-notifications {
+  position: fixed;
+  z-index: 10;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.chat-notification {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #97b8b0;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(20 58 53 / 18%);
+  color: #173d38;
+  background: #f4fffb;
+}
+
 @media (max-width: 480px) {
   .chat-shell {
     display: block;

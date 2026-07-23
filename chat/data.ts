@@ -847,6 +847,51 @@ export class ChatRepository {
     )).value;
   }
 
+  async advanceReadPosition(position: ReadPosition): Promise<ReadPosition> {
+    const key = chatKeys.readPosition(position.roomId, position.userId);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const entry = await this.kv.get<ReadPosition>(key);
+      const current = entry.value;
+      // A stale browser tab must never move the marker backwards and make
+      // messages unread again.
+      if (
+        current?.lastReadMessageId && position.lastReadMessageId &&
+        current.lastReadMessageId >= position.lastReadMessageId
+      ) {
+        return current;
+      }
+      const result = await this.kv.atomic()
+        .check({ key, versionstamp: entry.versionstamp })
+        .set(key, position)
+        .commit();
+      if (result.ok) return position;
+    }
+    return (await this.getReadPosition(position.roomId, position.userId)) ??
+      position;
+  }
+
+  async countUnreadMessages(
+    roomId: string,
+    userId: string,
+    visibleFrom: IsoDateTime,
+    lastReadMessageId: string | null,
+  ): Promise<number> {
+    const messages = this.kv.list<Message>({
+      start: ["chat", "messages", roomId, sortableIdLowerBound(visibleFrom)],
+      end: ["chat", "messages", roomId, "\uffff"],
+    });
+    let count = 0;
+    for await (const entry of messages) {
+      const message = entry.value;
+      if (
+        message.createdAt >= visibleFrom &&
+        (!lastReadMessageId || message.id > lastReadMessageId) &&
+        message.authorId !== userId
+      ) count += 1;
+    }
+    return count;
+  }
+
   async setNotification(notification: Notification): Promise<void> {
     await this.kv.set(
       chatKeys.notification(notification.userId, notification.id),

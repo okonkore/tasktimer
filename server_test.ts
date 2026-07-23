@@ -152,6 +152,33 @@ Deno.test("chat message API routes use the configured handler", async () => {
   );
 });
 
+Deno.test("chat notification API routes use the configured handler", async () => {
+  const handledPaths: string[] = [];
+  const dependencies = {
+    chatNotificationHandler: (request: Request) => {
+      handledPaths.push(new URL(request.url).pathname);
+      return Promise.resolve(Response.json({ ok: true }, { status: 202 }));
+    },
+  };
+  const room = "room-0000000000000001";
+  const routes = [
+    ["/api/chat/notifications", "GET"],
+    [`/api/chat/rooms/${room}/read-position`, "POST"],
+  ];
+  for (const [path, method] of routes) {
+    const response = await handleRequest(
+      new Request(`http://localhost${path}`, { method }),
+      dependencies,
+    );
+    assert(response.status === 202, "notification handler should be delegated");
+  }
+  assert(
+    JSON.stringify(handledPaths) ===
+      JSON.stringify(routes.map(([path]) => path)),
+    "notification routes should be delegated",
+  );
+});
+
 Deno.test("chat event route uses the configured SSE handler", async () => {
   const handledPaths: string[] = [];
   const response = await handleRequest(
