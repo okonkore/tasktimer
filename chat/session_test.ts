@@ -255,6 +255,55 @@ Deno.test("profile updates require CSRF and keep email private", async () => {
   });
 });
 
+Deno.test("profile email notification setting requires CSRF and only accepts booleans", async () => {
+  await withSessions(async ({ repository, service, handler }) => {
+    const login = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const cookies = cookieHeader(login);
+    const csrfToken = cookieValue(cookies, csrfCookieName);
+
+    const missingCsrf = await handler(request("/api/chat/me", {
+      method: "PATCH",
+      headers: { cookie: cookies },
+      body: JSON.stringify({ emailNotificationsEnabled: false }),
+    }));
+    assert(missingCsrf.status === 403, "setting updates require CSRF");
+
+    const invalid = await handler(request("/api/chat/me", {
+      method: "PATCH",
+      headers: {
+        cookie: cookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrfToken,
+      },
+      body: JSON.stringify({ emailNotificationsEnabled: "false" }),
+    }));
+    assert(invalid.status === 400, "setting must be a boolean");
+
+    const updated = await handler(request("/api/chat/me", {
+      method: "PATCH",
+      headers: {
+        cookie: cookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrfToken,
+      },
+      body: JSON.stringify({ emailNotificationsEnabled: false }),
+    }));
+    assert(updated.status === 200, "valid setting update should succeed");
+    const body = await updated.json();
+    assert(
+      body.user.emailNotificationsEnabled === false,
+      "public profile should return the saved setting",
+    );
+    assert(
+      (await repository.getUser("user-1"))?.emailNotificationsEnabled === false,
+      "setting should persist",
+    );
+  });
+});
+
 Deno.test("profile display names must contain 1 through 30 non-whitespace characters", async () => {
   await withSessions(async ({ repository, service, handler }) => {
     const login = await service.completeOtpAuthentication(

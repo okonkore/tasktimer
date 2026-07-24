@@ -4,6 +4,7 @@ import {
   type JoinRequest,
   type Member,
   type MemberRole,
+  type Room,
 } from "./data.ts";
 import {
   ChatSessionService,
@@ -31,20 +32,79 @@ const memberItemPattern = new RegExp(
 type Clock = () => Date;
 type JoinRole = Extract<MemberRole, "viewer" | "writer">;
 
+export interface JoinRequestMail {
+  to: string;
+  roomName: string;
+  applicantDisplayName: string;
+  managementUrl: string;
+}
+
+export interface JoinRequestMailer {
+  sendJoinRequest(mail: JoinRequestMail): Promise<void>;
+}
+
+export interface ResendJoinRequestMailerOptions {
+  apiKey: string;
+  from: string;
+  fetcher?: typeof fetch;
+}
+
+export class ResendJoinRequestMailer implements JoinRequestMailer {
+  readonly #apiKey: string;
+  readonly #from: string;
+  readonly #fetcher: typeof fetch;
+
+  constructor(options: ResendJoinRequestMailerOptions) {
+    if (!options.apiKey || !options.from) {
+      throw new Error("Resend configuration is incomplete");
+    }
+    this.#apiKey = options.apiKey;
+    this.#from = options.from;
+    this.#fetcher = options.fetcher ?? fetch;
+  }
+
+  async sendJoinRequest(mail: JoinRequestMail): Promise<void> {
+    const response = await this.#fetcher("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.#apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        from: this.#from,
+        to: [mail.to],
+        subject: "Paradise Timer に参加申請が届きました",
+        text: `「${mail.roomName}」に ${mail.applicantDisplayName} さんから` +
+          "参加申請が届きました。\n\n" +
+          `参加申請を確認: ${mail.managementUrl}`,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Resend request failed with status ${response.status}`);
+    }
+  }
+}
+
 export interface JoinRequestServiceOptions {
   repository: ChatRepository;
   sessions: ChatSessionService;
+  mailer?: JoinRequestMailer;
+  publicOrigin?: string;
   now?: Clock;
 }
 
 export class ChatJoinRequestService {
   readonly #repository: ChatRepository;
   readonly #sessions: ChatSessionService;
+  readonly #mailer: JoinRequestMailer | null;
+  readonly #publicOrigin: string | null;
   readonly #now: Clock;
 
   constructor(options: JoinRequestServiceOptions) {
     this.#repository = options.repository;
     this.#sessions = options.sessions;
+    this.#mailer = options.mailer ?? null;
+    this.#publicOrigin = configuredPublicOrigin(options.publicOrigin);
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -146,7 +206,10 @@ export class ChatJoinRequestService {
     );
   }
 
-  async #submit(roomId: string, userId: string): Promise<Response> {
+  async #submit(
+    roomId: string,
+    userId: string,
+  ): Promise<Response> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const [roomEntry, memberEntry, requestEntry] = await Promise.all([
         this.#repository.getRoomEntry(roomId),
@@ -222,10 +285,59 @@ export class ChatJoinRequestService {
           event,
         )
       ) {
+        await this.#notifyOwnerOfJoinRequest(
+          joinRequest,
+          roomEntry.value,
+        );
         return joinJson({ request: publicJoinRequest(joinRequest) }, 201);
       }
     }
     return joinJson({ error: "Could not submit join request" }, 503);
+  }
+
+  async #notifyOwnerOfJoinRequest(
+    joinRequest: JoinRequest,
+    room: Room,
+  ): Promise<void> {
+    if (!this.#mailer || !this.#publicOrigin) return;
+    const [owner, applicant, requestEntry] = await Promise.all([
+      this.#repository.getUser(room.ownerId),
+      this.#repository.getUser(joinRequest.userId),
+      this.#repository.getJoinRequestEntry(
+        joinRequest.roomId,
+        joinRequest.userId,
+      ),
+    ]);
+    if (
+      !owner || owner.deletedAt || !owner.emailNotificationsEnabled ||
+      !applicant || applicant.deletedAt || !requestEntry.value ||
+      !requestEntry.versionstamp || requestEntry.value.status !== "pending" ||
+      requestEntry.value.requestedAt !== joinRequest.requestedAt ||
+      requestEntry.value.emailNotifiedAt !== null
+    ) return;
+
+    const managementUrl = roomManagementUrl(this.#publicOrigin, room.id);
+
+    // Persist the notification claim before delivery. A retried request cannot
+    // generate another email, including if the provider response is lost.
+    const claimed = await this.#repository.claimJoinRequestEmailNotification(
+      requestEntry.value,
+      requestEntry.versionstamp,
+      this.#now().toISOString(),
+    );
+    if (!claimed) return;
+
+    try {
+      await this.#mailer.sendJoinRequest({
+        to: owner.email,
+        roomName: room.name,
+        applicantDisplayName: applicant.displayName ?? "名前未設定のユーザー",
+        managementUrl,
+      });
+    } catch {
+      // The request and its notification claim remain durable even when the
+      // external provider is unavailable. Do not leak recipient data in logs.
+    }
   }
 
   async #listPending(roomId: string, ownerId: string): Promise<Response> {
@@ -554,6 +666,28 @@ export function createChatJoinRequestHandler(
   service: ChatJoinRequestService,
 ): (request: Request) => Promise<Response> {
   return service.handler();
+}
+
+function configuredPublicOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const origin = new URL(value);
+    if (
+      (origin.protocol !== "http:" && origin.protocol !== "https:") ||
+      origin.username || origin.password || origin.pathname !== "/" ||
+      origin.search || origin.hash
+    ) return null;
+    return origin.origin;
+  } catch {
+    return null;
+  }
+}
+
+function roomManagementUrl(origin: string, roomId: string): string {
+  return new URL(
+    `/chat/rooms/${encodeURIComponent(roomId)}/members`,
+    origin,
+  ).toString();
 }
 
 function publicJoinRequest(request: JoinRequest) {

@@ -70,6 +70,20 @@ select {
   font: inherit;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.checkbox-row input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+}
+
 textarea {
   resize: vertical;
 }

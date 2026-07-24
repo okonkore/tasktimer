@@ -2,6 +2,8 @@ import { ChatRepository, type JoinRequest } from "./data.ts";
 import {
   ChatJoinRequestService,
   createChatJoinRequestHandler,
+  type JoinRequestMail,
+  ResendJoinRequestMailer,
 } from "./join_requests.ts";
 import { ChatRoomService, createChatRoomHandler } from "./rooms.ts";
 import {
@@ -33,6 +35,10 @@ function cookieValue(cookies: string, name: string): string {
   return value.slice(prefix.length);
 }
 
+function mailCount(mails: JoinRequestMail[]): number {
+  return mails.length;
+}
+
 interface Login {
   userId: string;
   cookies: string;
@@ -46,10 +52,17 @@ interface JoinTestContext {
   login(email: string): Promise<Login>;
   createRoom(owner: Login): Promise<string>;
   setNow(value: string): void;
+  sentMails: JoinRequestMail[];
+  setMailFailure(value: boolean): void;
+}
+
+interface JoinTestOptions {
+  publicOrigin?: string;
 }
 
 async function withJoinService(
   run: (context: JoinTestContext) => Promise<void>,
+  options: JoinTestOptions = { publicOrigin: "https://public.example" },
 ): Promise<void> {
   const kv = await Deno.openKv(":memory:");
   const repository = new ChatRepository(kv);
@@ -57,6 +70,8 @@ async function withJoinService(
   let userIndex = 0;
   let tokenIndex = 0;
   let roomIndex = 0;
+  let mailFailure = false;
+  const sentMails: JoinRequestMail[] = [];
   const sessions = new ChatSessionService({
     repository,
     now: () => new Date(currentTime),
@@ -75,6 +90,15 @@ async function withJoinService(
     new ChatJoinRequestService({
       repository,
       sessions,
+      mailer: {
+        sendJoinRequest(mail) {
+          sentMails.push(mail);
+          return mailFailure
+            ? Promise.reject(new Error("delivery unavailable"))
+            : Promise.resolve();
+        },
+      },
+      publicOrigin: options.publicOrigin,
       now: () => new Date(currentTime),
     }),
   );
@@ -86,6 +110,10 @@ async function withJoinService(
       joinHandler,
       setNow(value) {
         currentTime = new Date(value);
+      },
+      sentMails,
+      setMailFailure(value) {
+        mailFailure = value;
       },
       async login(email) {
         const response = await sessions.completeOtpAuthentication(
@@ -190,6 +218,204 @@ Deno.test("unapproved users cannot read room contents and requests require authe
       const duplicate = await joinHandler(mutation(requestPath, applicant));
       assert(duplicate.status === 409, "duplicate pending request must fail");
     },
+  );
+});
+
+Deno.test("a join request notifies an enabled owner once without exposing email in mail content", async () => {
+  await withJoinService(async (
+    { repository, joinHandler, login, createRoom, sentMails },
+  ) => {
+    const owner = await login("owner@example.com");
+    const applicant = await login("applicant@example.com");
+    await repository.updateUserDisplayName(
+      owner.userId,
+      "オーナー",
+      "2026-07-19T12:00:00.000Z",
+    );
+    await repository.updateUserDisplayName(
+      applicant.userId,
+      "申請者 太郎",
+      "2026-07-19T12:00:00.000Z",
+    );
+    const roomId = await createRoom(owner);
+    const path = `/api/chat/rooms/${roomId}/requests`;
+
+    const submitted = await joinHandler(mutation(path, applicant));
+    assert(submitted.status === 201, "application should be saved");
+    assert(sentMails.length === 1, "one application should send one email");
+    const mail = sentMails[0];
+    assert(mail.to === "owner@example.com", "only the owner receives mail");
+    assert(mail.roomName === "Private planning", "mail names the room");
+    assert(
+      mail.applicantDisplayName === "申請者 太郎",
+      "mail uses the applicant display name",
+    );
+    assert(
+      mail.managementUrl ===
+        `https://public.example/chat/rooms/${roomId}/members`,
+      "mail must use the configured public origin rather than the request host",
+    );
+    assert(
+      !JSON.stringify({ ...mail, to: undefined }).includes("@example.com"),
+      "mail content must not contain email addresses",
+    );
+    assert(
+      (await repository.getJoinRequest(roomId, applicant.userId))
+        ?.emailNotifiedAt !== null,
+      "successful notification should be recorded",
+    );
+
+    const duplicate = await joinHandler(mutation(path, applicant));
+    assert(duplicate.status === 409, "same pending request should be rejected");
+    assert(
+      sentMails.length === 1,
+      "a duplicate request must not send another email",
+    );
+  });
+});
+
+Deno.test("join-request mail is not sent without a valid configured public origin", async () => {
+  await withJoinService(
+    async ({ repository, joinHandler, login, createRoom, sentMails }) => {
+      const owner = await login("owner@example.com");
+      const applicant = await login("applicant@example.com");
+      const roomId = await createRoom(owner);
+      const submitted = await joinHandler(mutation(
+        `/api/chat/rooms/${roomId}/requests`,
+        applicant,
+      ));
+      assert(
+        submitted.status === 201,
+        "request should be saved without email config",
+      );
+      assert(
+        sentMails.length === 0,
+        "unconfigured public origin must suppress mail",
+      );
+      assert(
+        (await repository.getJoinRequest(roomId, applicant.userId))
+          ?.emailNotifiedAt === null,
+        "a suppressed notification must not consume its delivery claim",
+      );
+    },
+    {},
+  );
+});
+
+Deno.test("join-request mail rejects invalid public-origin configuration", async () => {
+  await withJoinService(
+    async ({ joinHandler, login, createRoom, sentMails }) => {
+      const owner = await login("owner@example.com");
+      const applicant = await login("applicant@example.com");
+      const roomId = await createRoom(owner);
+      const submitted = await joinHandler(mutation(
+        `/api/chat/rooms/${roomId}/requests`,
+        applicant,
+      ));
+      assert(
+        submitted.status === 201,
+        "request should be saved with bad email config",
+      );
+      assert(
+        sentMails.length === 0,
+        "invalid public origin must suppress mail",
+      );
+    },
+    { publicOrigin: "https://attacker.example/untrusted-path" },
+  );
+});
+
+Deno.test("disabled owners receive no join-request email and delivery failures keep the request", async () => {
+  await withJoinService(async (
+    {
+      repository,
+      joinHandler,
+      login,
+      createRoom,
+      sentMails,
+      setMailFailure,
+    },
+  ) => {
+    const disabledOwner = await login("disabled-owner@example.com");
+    const firstApplicant = await login("first@example.com");
+    const enabledOwner = await login("enabled-owner@example.com");
+    const secondApplicant = await login("second@example.com");
+    await repository.updateUserProfile(
+      disabledOwner.userId,
+      { emailNotificationsEnabled: false },
+      "2026-07-19T12:00:00.000Z",
+    );
+    const disabledRoom = await createRoom(disabledOwner);
+    const disabledResponse = await joinHandler(mutation(
+      `/api/chat/rooms/${disabledRoom}/requests`,
+      firstApplicant,
+    ));
+    assert(disabledResponse.status === 201, "request should be saved when off");
+    assert(
+      mailCount(sentMails) === 0,
+      "disabled owners should not receive mail",
+    );
+    assert(
+      (await repository.getJoinRequest(disabledRoom, firstApplicant.userId))
+        ?.emailNotifiedAt === null,
+      "disabled notification should not claim a delivery",
+    );
+
+    const enabledRoom = await createRoom(enabledOwner);
+    setMailFailure(true);
+    const failedDelivery = await joinHandler(mutation(
+      `/api/chat/rooms/${enabledRoom}/requests`,
+      secondApplicant,
+    ));
+    assert(
+      failedDelivery.status === 201,
+      "delivery failure must not roll back the join request",
+    );
+    assert(
+      mailCount(sentMails) === 1,
+      "enabled owner should get one delivery attempt",
+    );
+    assert(
+      (await repository.getJoinRequest(enabledRoom, secondApplicant.userId))
+        ?.emailNotifiedAt !== null,
+      "failed delivery is claimed to prevent duplicate retry emails",
+    );
+  });
+});
+
+Deno.test("Resend join-request mail contains only the intended notification fields", async () => {
+  const capturedRequests: Request[] = [];
+  const mailer = new ResendJoinRequestMailer({
+    apiKey: "resend-test-key",
+    from: "Paradise Timer <notify@example.com>",
+    fetcher: (input, init) => {
+      capturedRequests.push(new Request(input, init));
+      return Promise.resolve(new Response(null, { status: 200 }));
+    },
+  });
+  await mailer.sendJoinRequest({
+    to: "owner@example.com",
+    roomName: "週次計画",
+    applicantDisplayName: "申請者",
+    managementUrl:
+      "https://chat.example/chat/rooms/room-0000000000000001/members",
+  });
+  const request = capturedRequests[0];
+  assert(request !== undefined, "Resend request should be made");
+  assert(
+    request.headers.get("authorization") === "Bearer resend-test-key",
+    "Resend authorization should be used",
+  );
+  const payload = await request.json();
+  assert(payload.to[0] === "owner@example.com", "recipient is sent separately");
+  assert(
+    payload.text.includes("週次計画") && payload.text.includes("申請者") &&
+      payload.text.includes("/members"),
+    "mail body should include room, applicant, and management link",
+  );
+  assert(
+    !payload.text.includes("@example.com"),
+    "mail body must not expose an email address",
   );
 });
 
@@ -591,6 +817,7 @@ Deno.test("removed users can reapply and concurrent submissions create one pendi
     login,
     createRoom,
     setNow,
+    sentMails,
   }) => {
     const owner = await login("owner@example.com");
     const removedUser = await login("removed@example.com");
@@ -619,8 +846,8 @@ Deno.test("removed users can reapply and concurrent submissions create one pendi
       "removed state should return to pending",
     );
     assert(
-      stored.emailNotifiedAt === null,
-      "a new application must reset notification deduplication",
+      stored.emailNotifiedAt !== null,
+      "a new application should receive its own notification claim",
     );
 
     const path = `/api/chat/rooms/${roomId}/requests`;
@@ -632,6 +859,10 @@ Deno.test("removed users can reapply and concurrent submissions create one pendi
     assert(
       JSON.stringify(statuses) === JSON.stringify([201, 409]),
       "atomic submission should accept exactly one concurrent request",
+    );
+    assert(
+      sentMails.length === 2,
+      "concurrent requests should add exactly one notification after the reapplication",
     );
   });
 });

@@ -12,6 +12,7 @@ import { ChatRoomService, createChatRoomHandler } from "./chat/rooms.ts";
 import {
   ChatJoinRequestService,
   createChatJoinRequestHandler,
+  ResendJoinRequestMailer,
 } from "./chat/join_requests.ts";
 import {
   ChatMessageService,
@@ -322,6 +323,7 @@ function initializeProductionChatHandlers(): void {
   const authSecret = Deno.env.get("AUTH_SECRET") ?? "";
   const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
+  const chatPublicOrigin = Deno.env.get("CHAT_PUBLIC_ORIGIN");
   const repository = new ChatRepository(kv);
   const sessionService = new ChatSessionService({ repository });
   const service = new OtpAuthService({
@@ -351,6 +353,11 @@ function initializeProductionChatHandlers(): void {
     new ChatJoinRequestService({
       repository,
       sessions: sessionService,
+      mailer: new ResendJoinRequestMailer({
+        apiKey: resendApiKey,
+        from: emailFrom,
+      }),
+      publicOrigin: chatPublicOrigin,
     }),
   );
   productionChatMessageHandler = createChatMessageHandler(

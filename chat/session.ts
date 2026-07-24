@@ -39,6 +39,11 @@ export interface CurrentUser {
   emailNotificationsEnabled: boolean;
 }
 
+interface ProfileUpdate {
+  displayName?: string;
+  emailNotificationsEnabled?: boolean;
+}
+
 export class ChatSessionService {
   readonly #repository: ChatRepository;
   readonly #now: Clock;
@@ -186,9 +191,16 @@ export class ChatSessionService {
     authenticated: AuthenticatedChatRequest,
     displayName: string,
   ): Promise<User | null> {
-    return await this.#repository.updateUserDisplayName(
+    return await this.updateProfile(authenticated, { displayName });
+  }
+
+  async updateProfile(
+    authenticated: AuthenticatedChatRequest,
+    changes: ProfileUpdate,
+  ): Promise<User | null> {
+    return await this.#repository.updateUserProfile(
       authenticated.user.id,
-      displayName,
+      changes,
       this.#now().toISOString(),
     );
   }
@@ -237,18 +249,10 @@ export function createSessionAuthHandler(
         if (authenticated instanceof Response) return authenticated;
         const body = await readProfileJson(request);
         if (body instanceof Response) return body;
-        const displayName = displayNameFrom(body);
-        if (!displayName) {
-          return sessionJson(
-            { error: "Display name must be between 1 and 30 characters" },
-            400,
-          );
-        }
+        const update = profileUpdateFrom(body);
+        if (update instanceof Response) return update;
 
-        const user = await service.updateDisplayName(
-          authenticated,
-          displayName,
-        );
+        const user = await service.updateProfile(authenticated, update);
         if (!user) {
           return sessionJson({ error: "Could not update profile" }, 503);
         }
@@ -316,12 +320,46 @@ function currentUser(user: User): CurrentUser {
   };
 }
 
-function displayNameFrom(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const displayName = (value as Record<string, unknown>).displayName;
-  if (typeof displayName !== "string") return null;
-  const normalized = displayName.trim();
-  return normalized.length >= 1 && normalized.length <= 30 ? normalized : null;
+function profileUpdateFrom(value: unknown): ProfileUpdate | Response {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return sessionJson({ error: "Profile update is required" }, 400);
+  }
+  const candidate = value as Record<string, unknown>;
+  const allowedKeys = new Set(["displayName", "emailNotificationsEnabled"]);
+  if (
+    Object.keys(candidate).length === 0 ||
+    Object.keys(candidate).some((key) => !allowedKeys.has(key))
+  ) {
+    return sessionJson({ error: "Invalid profile update" }, 400);
+  }
+
+  const update: ProfileUpdate = {};
+  if (Object.hasOwn(candidate, "displayName")) {
+    if (typeof candidate.displayName !== "string") {
+      return sessionJson(
+        { error: "Display name must be between 1 and 30 characters" },
+        400,
+      );
+    }
+    const displayName = candidate.displayName.trim();
+    if (displayName.length < 1 || displayName.length > 30) {
+      return sessionJson(
+        { error: "Display name must be between 1 and 30 characters" },
+        400,
+      );
+    }
+    update.displayName = displayName;
+  }
+  if (Object.hasOwn(candidate, "emailNotificationsEnabled")) {
+    if (typeof candidate.emailNotificationsEnabled !== "boolean") {
+      return sessionJson(
+        { error: "Email notification setting must be boolean" },
+        400,
+      );
+    }
+    update.emailNotificationsEnabled = candidate.emailNotificationsEnabled;
+  }
+  return update;
 }
 
 async function readProfileJson(request: Request): Promise<unknown | Response> {

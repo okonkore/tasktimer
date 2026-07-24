@@ -400,6 +400,11 @@ async function renderProfile() {
         <label for="displayName">表示名</label>
         <input id="displayName" name="displayName" type="text" autocomplete="nickname" required minlength="1" maxlength="30" />
         <p class="field-hint">1〜30文字。ほかのユーザーにはメールアドレスを表示しません。</p>
+        <label class="checkbox-row" for="emailNotificationsEnabled">
+          <input id="emailNotificationsEnabled" name="emailNotificationsEnabled" type="checkbox" />
+          参加申請をメールで受け取る
+        </label>
+        <p class="field-hint">自分がオーナーのルームへの参加申請をメールで通知します。</p>
         <p class="form-error" data-error role="alert" hidden></p>
         <p class="form-success" data-success role="status" hidden></p>
         <button type="submit">${
@@ -411,10 +416,13 @@ async function renderProfile() {
     }`);
     const form = app.querySelector("[data-profile-form]");
     const input = form.elements.displayName;
+    const emailNotificationsInput = form.elements.emailNotificationsEnabled;
     const error = form.querySelector("[data-error]");
     const success = form.querySelector("[data-success]");
     const button = form.querySelector("button");
     input.value = current.user.displayName ?? "";
+    emailNotificationsInput.checked = current.user.emailNotificationsEnabled !==
+      false;
     input.focus();
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -437,7 +445,10 @@ async function renderProfile() {
             "content-type": "application/json",
             ...(csrfToken ? { "x-csrf-token": csrfToken } : {}),
           },
-          body: JSON.stringify({ displayName }),
+          body: JSON.stringify({
+            displayName,
+            emailNotificationsEnabled: emailNotificationsInput.checked,
+          }),
         });
         const body = await response.json().catch(() => null);
         if (response.status === 401) {

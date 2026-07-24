@@ -300,12 +300,20 @@ export class ChatRepository {
     displayName: string,
     updatedAt: IsoDateTime,
   ): Promise<User | null> {
+    return await this.updateUserProfile(userId, { displayName }, updatedAt);
+  }
+
+  async updateUserProfile(
+    userId: string,
+    changes: Partial<Pick<User, "displayName" | "emailNotificationsEnabled">>,
+    updatedAt: IsoDateTime,
+  ): Promise<User | null> {
     const key = chatKeys.user(userId);
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const entry = await this.kv.get<User>(key);
       if (!entry.value || !entry.versionstamp) return null;
 
-      const user: User = { ...entry.value, displayName, updatedAt };
+      const user: User = { ...entry.value, ...changes, updatedAt };
       const result = await this.kv.atomic()
         .check({ key, versionstamp: entry.versionstamp })
         .set(key, user)
@@ -665,6 +673,21 @@ export class ChatRepository {
     operation = (await this.#appendEvent(operation, event)).operation;
     const result = await operation.commit();
     return result.ok;
+  }
+
+  async claimJoinRequestEmailNotification(
+    request: JoinRequest,
+    expectedVersionstamp: string,
+    notifiedAt: IsoDateTime,
+  ): Promise<JoinRequest | null> {
+    if (request.emailNotifiedAt !== null) return null;
+    const key = chatKeys.request(request.roomId, request.userId);
+    const notified: JoinRequest = { ...request, emailNotifiedAt: notifiedAt };
+    const result = await this.kv.atomic()
+      .check({ key, versionstamp: expectedVersionstamp })
+      .set(key, notified)
+      .commit();
+    return result.ok ? notified : null;
   }
 
   async approveJoinRequest(

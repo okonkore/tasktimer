@@ -37,9 +37,10 @@
 RESEND_API_KEY
 AUTH_SECRET
 EMAIL_FROM
+CHAT_PUBLIC_ORIGIN
 ```
 
-`AUTH_SECRET`には十分な長さの暗号学的乱数を設定する。秘密値はGitへコミットしない。
+`AUTH_SECRET`には十分な長さの暗号学的乱数を設定する。`CHAT_PUBLIC_ORIGIN`には、参加申請メールの管理リンクに使う本番サイトの`https://`オリジン（例: `https://tasktimer.example.com`）を設定する。秘密値はGitへコミットしない。
 
 ### 2.3 現在の仕様コミット
 
