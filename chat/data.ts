@@ -12,11 +12,21 @@ export type NotificationType =
 export interface User {
   id: string;
   email: string;
+  /** Null for email-only accounts created before username/password sign-in. */
+  username?: string | null;
   displayName: string | null;
   emailNotificationsEnabled: boolean;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
   deletedAt: IsoDateTime | null;
+}
+
+export interface PasswordCredential {
+  userId: string;
+  salt: string;
+  hash: string;
+  iterations: number;
+  createdAt: IsoDateTime;
 }
 
 export interface Session {
@@ -167,6 +177,16 @@ export const chatKeys = Object.freeze({
     ...chatPrefix,
     "usersByEmail",
     normalizeEmail(email),
+  ],
+  userByUsername: (username: string): Deno.KvKey => [
+    ...chatPrefix,
+    "usersByUsername",
+    username.trim().toLowerCase(),
+  ],
+  passwordCredential: (userId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "passwordCredentials",
+    userId,
   ],
   otp: (
     email: string,
@@ -377,6 +397,52 @@ export class ChatRepository {
     const userId =
       (await this.kv.get<string>(chatKeys.userByEmail(email))).value;
     return userId ? await this.getUser(userId) : null;
+  }
+
+  async getUserByUsername(username: string): Promise<User | null> {
+    const userId =
+      (await this.kv.get<string>(chatKeys.userByUsername(username)))
+        .value;
+    return userId ? await this.getUser(userId) : null;
+  }
+
+  async getPasswordCredential(
+    userId: string,
+  ): Promise<PasswordCredential | null> {
+    return (await this.kv.get<PasswordCredential>(
+      chatKeys.passwordCredential(userId),
+    ))
+      .value;
+  }
+
+  async createPasswordUser(
+    user: User,
+    credential: PasswordCredential,
+  ): Promise<boolean> {
+    if (!user.username) {
+      throw new TypeError("Password users require a username");
+    }
+    const normalizedUser = {
+      ...user,
+      email: normalizeEmail(user.email),
+      username: user.username.trim().toLowerCase(),
+    };
+    const result = await this.kv.atomic()
+      .check(
+        { key: chatKeys.user(user.id), versionstamp: null },
+        { key: chatKeys.userByEmail(normalizedUser.email), versionstamp: null },
+        {
+          key: chatKeys.userByUsername(normalizedUser.username),
+          versionstamp: null,
+        },
+        { key: chatKeys.passwordCredential(user.id), versionstamp: null },
+      )
+      .set(chatKeys.user(user.id), normalizedUser)
+      .set(chatKeys.userByEmail(normalizedUser.email), user.id)
+      .set(chatKeys.userByUsername(normalizedUser.username), user.id)
+      .set(chatKeys.passwordCredential(user.id), credential)
+      .commit();
+    return result.ok;
   }
 
   async setSession(session: Session): Promise<void> {
@@ -789,8 +855,11 @@ export class ChatRepository {
     const countEntry = await this.kv.get<RoomOwnerCount>(
       chatKeys.roomOwnerCount(user.id),
     );
+    const usernameEntry = user.username
+      ? await this.kv.get<string>(chatKeys.userByUsername(user.username))
+      : null;
     if ((countEntry.value?.count ?? 0) > 0) return false;
-    const operation = this.kv.atomic()
+    let operation = this.kv.atomic()
       .check(
         {
           key: chatKeys.user(user.id),
@@ -806,9 +875,18 @@ export class ChatRepository {
       .delete(chatKeys.user(user.id))
       .delete(chatKeys.userByEmail(user.email))
       .delete(chatKeys.otp(user.email))
+      .delete(chatKeys.passwordCredential(user.id))
       .delete(chatKeys.session(deletion.sessionId))
       .delete(chatKeys.roomOwnerCount(user.id))
       .delete(chatKeys.accountDeletion(user.id));
+    if (user.username && usernameEntry) {
+      operation = operation
+        .check({
+          key: usernameEntry.key,
+          versionstamp: usernameEntry.versionstamp,
+        })
+        .delete(chatKeys.userByUsername(user.username));
+    }
     return (await operation.commit()).ok;
   }
 

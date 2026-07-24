@@ -1,10 +1,12 @@
 import {
   createOtpAuthHandler,
+  createPasswordAuthHandler,
   generateOtpCode,
   OtpAuthService,
   type OtpMail,
   type OtpMailer,
   otpPolicy,
+  PasswordAuthService,
   ResendOtpMailer,
 } from "./auth.ts";
 import { ChatRepository } from "./data.ts";
@@ -91,6 +93,101 @@ function post(
 Deno.test("OTP codes are six cryptographically generated digits", () => {
   for (let index = 0; index < 100; index += 1) {
     assert(/^\d{6}$/.test(generateOtpCode()), "OTP should contain six digits");
+  }
+});
+
+Deno.test("password registration stores only a PBKDF2 credential and login is non-enumerating", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const repository = new ChatRepository(kv);
+    const handler = createPasswordAuthHandler(
+      new PasswordAuthService({ repository }),
+      {
+        onAuthenticated: (user) =>
+          Promise.resolve(Response.json({ ok: true, userId: user.id })),
+      },
+    );
+    const password = "correct horse battery staple";
+    const registered = await post(handler, "/api/chat/auth/password/register", {
+      username: "Ada_01",
+      password,
+    });
+    assert(
+      registered.status === 200,
+      "registration should authenticate the new user",
+    );
+    const user = await repository.getUserByUsername("ada_01");
+    assert(
+      user?.displayName === null,
+      "first password login should require profile setup",
+    );
+    const credential = await repository.getPasswordCredential(user!.id);
+    assert(
+      credential && credential.hash !== password,
+      "password must be hashed",
+    );
+    assert(
+      !JSON.stringify(credential).includes(password),
+      "plaintext password must not be persisted",
+    );
+    const missing = await post(handler, "/api/chat/auth/password/login", {
+      username: "nobody",
+      password,
+    });
+    const incorrect = await post(handler, "/api/chat/auth/password/login", {
+      username: "ada_01",
+      password: "wrong password!",
+    });
+    assert(
+      missing.status === 401 && incorrect.status === 401,
+      "failed logins should share a status",
+    );
+    assertEquals(
+      await missing.json(),
+      await incorrect.json(),
+      "failed login response must not enumerate users",
+    );
+    const loggedIn = await post(handler, "/api/chat/auth/password/login", {
+      username: "ADA_01",
+      password,
+    });
+    assert(loggedIn.status === 200, "case-normalized username should log in");
+  } finally {
+    kv.close();
+  }
+});
+
+Deno.test("password registration is limited per client IP", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const handler = createPasswordAuthHandler(
+      new PasswordAuthService({ repository: new ChatRepository(kv) }),
+      {
+        onAuthenticated: () => Promise.resolve(Response.json({ ok: true })),
+        getClientIp: () => "198.51.100.8",
+      },
+    );
+    for (let index = 0; index < 10; index += 1) {
+      const response = await post(handler, "/api/chat/auth/password/register", {
+        username: `user_${index}`,
+        password: "correct horse battery staple",
+      });
+      assert(
+        response.status === 200,
+        "registrations within the limit should work",
+      );
+    }
+    const blocked = await post(handler, "/api/chat/auth/password/register", {
+      username: "user_over_limit",
+      password: "correct horse battery staple",
+    });
+    assert(blocked.status === 429, "eleventh registration must be limited");
+    assert(
+      blocked.headers.get("retry-after") !== null,
+      "limit must include Retry-After",
+    );
+  } finally {
+    kv.close();
   }
 });
 

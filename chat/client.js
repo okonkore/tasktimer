@@ -227,6 +227,11 @@ function renderLoginEmail(state) {
       <p class="form-error" data-error role="alert" hidden></p>
       <button type="submit">ログインコードを送信</button>
     </form>
+    <div class="actions"><a class="secondary-link" href="/chat/login/password?returnTo=${
+    encodeURIComponent(state.returnTo)
+  }">ユーザー名とパスワードでログイン</a><a class="secondary-link" href="/chat/register?returnTo=${
+    encodeURIComponent(state.returnTo)
+  }">新規登録</a></div>
     <p class="privacy-note">メールアドレスはログインにだけ使用し、他のユーザーには公開しません。</p>
     <a class="back-link" href="/">タイマーへ戻る</a>`);
 
@@ -269,6 +274,87 @@ function renderLoginEmail(state) {
       renderLoginEmail({ ...state, email, error: errorText(requestError) });
     }
   });
+}
+
+function renderPasswordAuth(state) {
+  clearRetryTimer();
+  const registering = state.register === true;
+  renderPanel(`
+    <h1 id="chatTitle">${
+    registering ? "チャットの新規登録" : "チャットにログイン"
+  }</h1>
+    <p class="lead">ユーザー名とパスワードで${
+    registering ? "アカウントを作成" : "ログイン"
+  }します。</p>
+    <form class="stack" data-password-form novalidate>
+      <label for="username">ユーザー名</label>
+      <input id="username" name="username" type="text" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]+" />
+      <p class="field-hint">英数字・_・- を使って3〜32文字で入力してください。</p>
+      <label for="password">パスワード</label>
+      <input id="password" name="password" type="password" autocomplete="${
+    registering ? "new-password" : "current-password"
+  }" required minlength="12" maxlength="128" />
+      <p class="field-hint">12〜128文字で設定してください。</p>
+      <p class="form-error" data-error role="alert" hidden></p>
+      <button type="submit">${
+    registering ? "登録して続ける" : "ログイン"
+  }</button>
+    </form>
+    <div class="actions"><a class="secondary-link" href="/chat/login?returnTo=${
+    encodeURIComponent(state.returnTo)
+  }">メールでログイン</a>${
+    registering
+      ? `<a class="secondary-link" href="/chat/login/password?returnTo=${
+        encodeURIComponent(state.returnTo)
+      }">ログインへ</a>`
+      : `<a class="secondary-link" href="/chat/register?returnTo=${
+        encodeURIComponent(state.returnTo)
+      }">新規登録</a>`
+  }</div>`);
+  const form = app.querySelector("[data-password-form]");
+  const error = form.querySelector("[data-error]");
+  const button = form.querySelector("button");
+  form.elements.username.focus();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = form.elements.username.value.trim();
+    const password = form.elements.password.value;
+    if (
+      !/^[A-Za-z0-9_-]{3,32}$/.test(username) || password.length < 12 ||
+      password.length > 128
+    ) {
+      error.textContent = "入力内容を確認してください。";
+      error.hidden = false;
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "処理中…";
+    try {
+      const result = await postJson(
+        `/api/chat/auth/password/${registering ? "register" : "login"}`,
+        { username, password },
+      );
+      if (!result.response.ok) {
+        renderPasswordAuth({
+          ...state,
+          error: apiError(result.body, "ログインできませんでした。"),
+        });
+        return;
+      }
+      const destination = safeReturnTo(state.returnTo) ?? "/chat/";
+      navigate(
+        result.body?.needsProfile
+          ? `/chat/profile?setup=1&returnTo=${encodeURIComponent(destination)}`
+          : destination,
+      );
+    } catch (requestError) {
+      renderPasswordAuth({ ...state, error: errorText(requestError) });
+    }
+  });
+  if (state.error) {
+    error.textContent = state.error;
+    error.hidden = false;
+  }
 }
 
 function renderLoginCode(state) {
@@ -1740,6 +1826,11 @@ function start() {
       new URLSearchParams(globalThis.location.search).get("returnTo"),
     ) ?? "/chat/";
     renderLoginEmail({ email: "", returnTo });
+  } else if (path === "/chat/login/password" || path === "/chat/register") {
+    const returnTo = safeReturnTo(
+      new URLSearchParams(globalThis.location.search).get("returnTo"),
+    ) ?? "/chat/";
+    renderPasswordAuth({ register: path === "/chat/register", returnTo });
   } else if (path === "/chat/profile") {
     void renderProfile();
   } else if (path === "/chat") {

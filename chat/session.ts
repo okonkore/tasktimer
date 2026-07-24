@@ -63,6 +63,25 @@ export class ChatSessionService {
     request: Request,
   ): Promise<Response> {
     try {
+      const user = await this.#getOrCreateUser(email);
+      return await this.#completeUserAuthentication(user, request);
+    } catch {
+      return sessionJson({ error: "Could not create a session" }, 503);
+    }
+  }
+
+  async completePasswordAuthentication(
+    user: User,
+    request: Request,
+  ): Promise<Response> {
+    return await this.#completeUserAuthentication(user, request);
+  }
+
+  async #completeUserAuthentication(
+    user: User,
+    request: Request,
+  ): Promise<Response> {
+    try {
       const oldToken = getCookie(
         request.headers.get("cookie"),
         sessionCookieName,
@@ -72,11 +91,8 @@ export class ChatSessionService {
           await hashToken("session", oldToken),
         );
       }
-
-      const user = await this.#getOrCreateUser(email);
       if (
-        user.deletedAt ||
-        await this.#repository.getAccountDeletion(user.id)
+        user.deletedAt || await this.#repository.getAccountDeletion(user.id)
       ) {
         return sessionJson({ error: "Account is unavailable" }, 403);
       }
@@ -272,6 +288,7 @@ export class ChatSessionService {
       const user: User = {
         id: this.#generateUserId(),
         email: normalizedEmail,
+        username: null,
         displayName: null,
         emailNotificationsEnabled: true,
         createdAt: now,

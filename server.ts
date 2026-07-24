@@ -1,6 +1,8 @@
 import {
   createOtpAuthHandler,
+  createPasswordAuthHandler,
   OtpAuthService,
+  PasswordAuthService,
   ResendOtpMailer,
 } from "./chat/auth.ts";
 import { ChatRepository } from "./chat/data.ts";
@@ -106,6 +108,8 @@ export async function handleRequest(
   if (
     url.pathname === "/api/chat/auth/request-otp" ||
     url.pathname === "/api/chat/auth/verify-otp" ||
+    url.pathname === "/api/chat/auth/password/register" ||
+    url.pathname === "/api/chat/auth/password/login" ||
     url.pathname === "/api/chat/auth/logout" ||
     url.pathname === "/api/chat/me"
   ) {
@@ -341,24 +345,50 @@ function initializeProductionChatHandlers(): void {
   const chatPublicOrigin = Deno.env.get("CHAT_PUBLIC_ORIGIN");
   const repository = new ChatRepository(kv);
   const sessionService = new ChatSessionService({ repository });
-  const service = new OtpAuthService({
-    repository,
-    mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
-    authSecret,
-  });
-  const otpHandler = createOtpAuthHandler(service, {
-    onVerified: (email, verifiedRequest) =>
-      sessionService.completeOtpAuthentication(email, verifiedRequest),
-    getClientIp: (request) =>
-      request.headers.get("x-tasktimer-client-ip") ?? "unavailable",
-  });
+  const passwordHandler = createPasswordAuthHandler(
+    new PasswordAuthService({ repository }),
+    {
+      onAuthenticated: (user, authenticatedRequest) =>
+        sessionService.completePasswordAuthentication(
+          user,
+          authenticatedRequest,
+        ),
+      getClientIp: (request) =>
+        request.headers.get("x-tasktimer-client-ip") ?? "unavailable",
+    },
+  );
+  const otpHandler = authSecret && resendApiKey && emailFrom
+    ? createOtpAuthHandler(
+      new OtpAuthService({
+        repository,
+        mailer: new ResendOtpMailer({ apiKey: resendApiKey, from: emailFrom }),
+        authSecret,
+      }),
+      {
+        onVerified: (email, verifiedRequest) =>
+          sessionService.completeOtpAuthentication(email, verifiedRequest),
+        getClientIp: (request) =>
+          request.headers.get("x-tasktimer-client-ip") ?? "unavailable",
+      },
+    )
+    : () =>
+      Promise.resolve(jsonResponse(
+        { error: "Email authentication is not configured" },
+        503,
+        { "cache-control": "no-store" },
+      ));
   const sessionHandler = createSessionAuthHandler(sessionService);
   productionChatAuthHandler = (authRequest) => {
     const path = new URL(authRequest.url).pathname;
-    return path === "/api/chat/auth/request-otp" ||
-        path === "/api/chat/auth/verify-otp"
-      ? otpHandler(authRequest)
-      : sessionHandler(authRequest);
+    if (
+      path === "/api/chat/auth/request-otp" ||
+      path === "/api/chat/auth/verify-otp"
+    ) return otpHandler(authRequest);
+    if (
+      path === "/api/chat/auth/password/register" ||
+      path === "/api/chat/auth/password/login"
+    ) return passwordHandler(authRequest);
+    return sessionHandler(authRequest);
   };
   productionChatRoomHandler = createChatRoomHandler(
     new ChatRoomService({
@@ -370,10 +400,14 @@ function initializeProductionChatHandlers(): void {
     new ChatJoinRequestService({
       repository,
       sessions: sessionService,
-      mailer: new ResendJoinRequestMailer({
-        apiKey: resendApiKey,
-        from: emailFrom,
-      }),
+      ...(resendApiKey && emailFrom
+        ? {
+          mailer: new ResendJoinRequestMailer({
+            apiKey: resendApiKey,
+            from: emailFrom,
+          }),
+        }
+        : {}),
       publicOrigin: chatPublicOrigin,
     }),
   );
