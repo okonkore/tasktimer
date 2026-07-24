@@ -302,7 +302,11 @@ export function createSessionAuthHandler(
       }
 
       if (request.method === "PATCH") {
-        const authenticated = await requireChatMutation(request, service);
+        const authenticated = await requireChatMutation(
+          request,
+          service,
+          false,
+        );
         if (authenticated instanceof Response) return authenticated;
         const body = await readProfileJson(request);
         if (body instanceof Response) return body;
@@ -313,11 +317,18 @@ export function createSessionAuthHandler(
         if (!user) {
           return sessionJson({ error: "Could not update profile" }, 503);
         }
-        return sessionJson({ user: currentUser(user), needsProfile: false });
+        return sessionJson({
+          user: currentUser(user),
+          needsProfile: user.displayName === null,
+        });
       }
 
       if (request.method === "DELETE") {
-        const authenticated = await requireChatMutation(request, service);
+        const authenticated = await requireChatMutation(
+          request,
+          service,
+          false,
+        );
         if (authenticated instanceof Response) return authenticated;
         const body = await readProfileJson(request);
         if (body instanceof Response) return body;
@@ -367,7 +378,11 @@ export function createSessionAuthHandler(
           Allow: "POST",
         });
       }
-      const authenticated = await requireChatMutation(request, service);
+      const authenticated = await requireChatMutation(
+        request,
+        service,
+        false,
+      );
       if (authenticated instanceof Response) return authenticated;
       await service.revoke(authenticated);
       const response = sessionJson({ ok: true });
@@ -393,11 +408,15 @@ export async function requireChatAuthentication(
 export async function requireChatMutation(
   request: Request,
   service: ChatSessionService,
+  requireCompletedProfile = true,
 ): Promise<AuthenticatedChatRequest | Response> {
   const authenticated = await requireChatAuthentication(request, service);
   if (authenticated instanceof Response) return authenticated;
   if (!await service.verifyCsrf(request, authenticated)) {
     return sessionJson({ error: "CSRF validation failed" }, 403);
+  }
+  if (requireCompletedProfile && authenticated.user.displayName === null) {
+    return sessionJson({ error: "Profile setup required" }, 409);
   }
   return authenticated;
 }

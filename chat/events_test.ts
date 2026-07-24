@@ -85,6 +85,11 @@ async function withEventService(
           request("/api/chat/auth/verify-otp", { method: "POST" }),
         );
         const body = await response.json();
+        await repository.updateUserProfile(
+          body.user.id,
+          { displayName: `User ${body.user.id}` },
+          new Date().toISOString(),
+        );
         const cookies = cookieHeader(response);
         return {
           userId: body.user.id,

@@ -73,6 +73,12 @@ async function withRoomService(
           email,
           request("/api/chat/auth/verify-otp", { method: "POST" }),
         );
+        const body = await response.clone().json();
+        await repository.updateUserProfile(
+          body.user.id,
+          { displayName: `User ${body.user.id}` },
+          "2026-07-19T12:00:00.000Z",
+        );
         const cookies = cookieHeader(response);
         return { cookies, csrf: cookieValue(cookies, csrfCookieName) };
       },
@@ -100,6 +106,29 @@ function mutation(
     body: JSON.stringify(body),
   });
 }
+
+Deno.test("chat mutations require initial display-name setup", async () => {
+  await withRoomService(async ({ sessions, handler }) => {
+    const login = await sessions.completeOtpAuthentication(
+      "new-user@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const cookies = cookieHeader(login);
+    const blocked = await handler(
+      mutation(
+        "/api/chat/rooms",
+        cookies,
+        cookieValue(cookies, csrfCookieName),
+        { name: "Blocked room", description: "" },
+      ),
+    );
+    assert(
+      blocked.status === 409 &&
+        (await blocked.json()).error === "Profile setup required",
+      "a new user must set a display name before creating a room",
+    );
+  });
+});
 
 Deno.test("rooms require authentication and create an owner membership", async () => {
   await withRoomService(async ({ repository, handler, login }) => {

@@ -76,6 +76,7 @@ type TimerDocument = {
 
 export interface RequestDependencies {
   clientIp?: string;
+  kv?: Deno.Kv;
   chatAuthHandler?: (request: Request) => Promise<Response>;
   chatRoomHandler?: (request: Request) => Promise<Response>;
   chatJoinRequestHandler?: (request: Request) => Promise<Response>;
@@ -89,6 +90,7 @@ export async function handleRequest(
   dependencies: RequestDependencies = {},
 ): Promise<Response> {
   const url = new URL(request.url);
+  const requestKv = dependencies.kv ?? kv;
 
   if (url.pathname === "/api/chat/health") {
     if (request.method !== "GET") {
@@ -163,18 +165,18 @@ export async function handleRequest(
   }
 
   if (url.pathname === "/api/documents") {
-    return handleDocumentCollectionRequest(request);
+    return handleDocumentCollectionRequest(request, requestKv);
   }
 
   const documentMatch = url.pathname.match(
     /^\/api\/documents\/([a-zA-Z0-9_-]{1,100})$/,
   );
   if (documentMatch) {
-    return handleDocumentRequest(request, documentMatch[1]);
+    return handleDocumentRequest(request, documentMatch[1], requestKv);
   }
 
   if (url.pathname === "/api/state") {
-    return handleStateRequest(request);
+    return handleStateRequest(request, requestKv);
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -194,7 +196,7 @@ export async function handleRequest(
     return new Response(request.method === "HEAD" ? null : body, {
       headers: {
         "content-type": file.contentType,
-        "cache-control": file.path === "index.html"
+        "cache-control": file.contentType.startsWith("text/html")
           ? "no-cache"
           : "public, max-age=3600",
         "x-content-type-options": "nosniff",
@@ -397,13 +399,14 @@ function initializeProductionChatHandlers(): void {
 
 async function handleDocumentCollectionRequest(
   request: Request,
+  requestKv: Deno.Kv,
 ): Promise<Response> {
   if (request.method === "GET") {
-    await migrateLegacyState();
+    await migrateLegacyState(requestKv);
     const documents: Array<Pick<TimerDocument, "id" | "name" | "updatedAt">> =
       [];
     for await (
-      const entry of kv.list<TimerDocument>({ prefix: documentPrefix })
+      const entry of requestKv.list<TimerDocument>({ prefix: documentPrefix })
     ) {
       const document = entry.value;
       if (!document?.id || !document?.name || !document?.updatedAt) continue;
@@ -429,7 +432,7 @@ async function handleDocumentCollectionRequest(
       createdAt: now,
       updatedAt: now,
     };
-    await kv.set([...documentPrefix, document.id], document);
+    await requestKv.set([...documentPrefix, document.id], document);
     return jsonResponse({ document }, 201);
   }
 
@@ -441,11 +444,12 @@ async function handleDocumentCollectionRequest(
 async function handleDocumentRequest(
   request: Request,
   id: string,
+  requestKv: Deno.Kv,
 ): Promise<Response> {
   const key: Deno.KvKey = [...documentPrefix, id];
 
   if (request.method === "GET") {
-    const entry = await kv.get<TimerDocument>(key);
+    const entry = await requestKv.get<TimerDocument>(key);
     if (!entry.value) return jsonResponse({ error: "Document not found" }, 404);
     return jsonResponse({ document: entry.value }, 200, {
       "cache-control": "no-store",
@@ -453,7 +457,7 @@ async function handleDocumentRequest(
   }
 
   if (request.method === "PUT") {
-    const existing = await kv.get<TimerDocument>(key);
+    const existing = await requestKv.get<TimerDocument>(key);
     if (!existing.value) {
       return jsonResponse({ error: "Document not found" }, 404);
     }
@@ -467,7 +471,7 @@ async function handleDocumentRequest(
       state: input.state,
       updatedAt: new Date().toISOString(),
     };
-    await kv.set(key, document);
+    await requestKv.set(key, document);
     return jsonResponse({ document });
   }
 
@@ -518,13 +522,16 @@ async function readJsonBody(request: Request): Promise<unknown | Response> {
   }
 }
 
-async function migrateLegacyState(): Promise<void> {
-  const migration = await kv.get(legacyMigrationKey);
+async function migrateLegacyState(requestKv: Deno.Kv): Promise<void> {
+  const migration = await requestKv.get(legacyMigrationKey);
   if (migration.value) return;
 
-  const legacy = await kv.get<AppState>(stateKey);
+  const legacy = await requestKv.get<AppState>(stateKey);
   const state = normalizeState(legacy.value);
-  const mutations = kv.atomic().check(migration).set(legacyMigrationKey, true);
+  const mutations = requestKv.atomic().check(migration).set(
+    legacyMigrationKey,
+    true,
+  );
   if (state) {
     const now = new Date().toISOString();
     const document: TimerDocument = {
@@ -539,9 +546,12 @@ async function migrateLegacyState(): Promise<void> {
   await mutations.commit();
 }
 
-async function handleStateRequest(request: Request): Promise<Response> {
+async function handleStateRequest(
+  request: Request,
+  requestKv: Deno.Kv,
+): Promise<Response> {
   if (request.method === "GET") {
-    const entry = await kv.get<AppState>(stateKey);
+    const entry = await requestKv.get<AppState>(stateKey);
     return jsonResponse({ state: entry.value }, 200, {
       "cache-control": "no-store",
     });
@@ -554,7 +564,7 @@ async function handleStateRequest(request: Request): Promise<Response> {
     const state = normalizeState(parsed);
     if (!state) return jsonResponse({ error: "Invalid task state" }, 400);
 
-    await kv.set(stateKey, state);
+    await requestKv.set(stateKey, state);
     return jsonResponse({ ok: true });
   }
 

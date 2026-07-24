@@ -98,6 +98,11 @@ async function withMessageService(
           request("/api/chat/auth/verify-otp", { method: "POST" }),
         );
         const body = await response.json();
+        await repository.updateUserProfile(
+          body.user.id,
+          { displayName: `User ${body.user.id}` },
+          currentTime.toISOString(),
+        );
         const cookies = cookieHeader(response);
         return {
           userId: body.user.id,
@@ -453,6 +458,21 @@ Deno.test("message deletion is limited to the author and owner and erases the bo
     assert(
       stored?.deletedBy === owner.userId,
       "the deletion actor should be retained",
+    );
+    const persistedEvents = await repository.listEventsAfter(
+      "00000000000000000000",
+    );
+    const creationEvent = persistedEvents.find((event) =>
+      event.type === "message-created" &&
+      event.payload.messageId === messageId
+    );
+    assert(
+      creationEvent?.payload.body === null,
+      "deleted message text must be redacted from replayable SSE events",
+    );
+    assert(
+      !JSON.stringify(persistedEvents).includes("secret body"),
+      "deleted message text must not be recoverable from event storage",
     );
 
     const ownMessage = await messageHandler(

@@ -50,6 +50,7 @@ Deno.test("chat keys use an isolated namespace and normalized email", () => {
     chatKeys.member("room-1", "user-1"),
     chatKeys.request("room-1", "user-1"),
     chatKeys.message("room-1", "message-1"),
+    chatKeys.messageEvent("room-1", "message-1"),
     chatKeys.readPosition("room-1", "user-1"),
     chatKeys.notification("user-1", "notification-1"),
     chatKeys.rateLimit("message", "user-1", "window-1"),
@@ -213,6 +214,50 @@ Deno.test("rate limit consumption is atomic under concurrent requests", async ()
       10,
     );
     assert(boundary.allowed, "the next window should open at the boundary");
+  } finally {
+    kv.close();
+  }
+});
+
+Deno.test("member and pending-request indexes do not silently truncate active data", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const repository = new ChatRepository(kv);
+    for (let index = 0; index < 125; index += 1) {
+      const roomId = `room-${String(index).padStart(4, "0")}`;
+      await kv.set(chatKeys.roomByMember("many-rooms-user", roomId), roomId);
+    }
+    assert(
+      (await repository.listRoomIdsByMember("many-rooms-user")).length === 125,
+      "all joined rooms should remain visible when a user joins over 120 rooms",
+    );
+
+    const roomId = "request-history-room";
+    for (let index = 0; index < 105; index += 1) {
+      await repository.setJoinRequest({
+        roomId,
+        userId: `closed-${String(index).padStart(4, "0")}`,
+        status: "rejected",
+        requestedAt: new Date(index * 1000).toISOString(),
+        reviewedAt: new Date(index * 1000).toISOString(),
+        rejectedUntil: new Date(86_400_000 + index * 1000).toISOString(),
+        emailNotifiedAt: null,
+      });
+    }
+    await repository.setJoinRequest({
+      roomId,
+      userId: "zzzz-new-pending",
+      status: "pending",
+      requestedAt: "2026-07-24T00:00:00.000Z",
+      reviewedAt: null,
+      rejectedUntil: null,
+      emailNotifiedAt: null,
+    });
+    const pending = await repository.listJoinRequests(roomId, "pending");
+    assert(
+      pending.length === 1 && pending[0].userId === "zzzz-new-pending",
+      "closed request history must not hide a later pending request",
+    );
   } finally {
     kv.close();
   }

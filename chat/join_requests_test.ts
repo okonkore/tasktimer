@@ -121,6 +121,11 @@ async function withJoinService(
           request("/api/chat/auth/verify-otp", { method: "POST" }),
         );
         const body = await response.json();
+        await repository.updateUserProfile(
+          body.user.id,
+          { displayName: `User ${body.user.id}` },
+          currentTime.toISOString(),
+        );
         const cookies = cookieHeader(response);
         return {
           userId: body.user.id,

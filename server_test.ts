@@ -32,6 +32,10 @@ Deno.test("timer and chat routes are served independently", async () => {
     "chat pages should include legacy clickjacking protection",
   );
   assert(
+    chatResponse.headers.get("cache-control") === "no-cache",
+    "chat HTML should revalidate across deploys and rollbacks",
+  );
+  assert(
     (await chatResponse.text()).includes('id="chatApp"'),
     "chat route should serve the interactive chat shell",
   );
@@ -45,6 +49,101 @@ Deno.test("chat health endpoint is available", async () => {
   const body = await response.json();
   assert(body.ok === true, "health response should be healthy");
   assert(body.service === "chat", "health response should identify chat");
+});
+
+Deno.test("timer state and saved documents still round-trip beside chat", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const initialState = {
+      stocks: [{ id: "stock-1", name: "設計" }],
+      timeline: [{
+        id: "task-1",
+        stockId: "stock-1",
+        nameSnapshot: "設計",
+        seconds: 1500,
+      }],
+    };
+    const saveState = await handleRequest(
+      new Request("http://localhost/api/state", {
+        method: "PUT",
+        body: JSON.stringify(initialState),
+      }),
+      { kv },
+    );
+    assert(saveState.status === 200, "timer state should save");
+
+    const loadState = await handleRequest(
+      new Request("http://localhost/api/state"),
+      { kv },
+    );
+    assert(
+      JSON.stringify((await loadState.json()).state) ===
+        JSON.stringify(initialState),
+      "the complete stock and timeline state should round-trip",
+    );
+
+    const createDocument = await handleRequest(
+      new Request("http://localhost/api/documents", {
+        method: "POST",
+        body: JSON.stringify({ name: "集中プラン", state: initialState }),
+      }),
+      { kv },
+    );
+    assert(createDocument.status === 201, "a timer document should be created");
+    const created = (await createDocument.json()).document;
+
+    const updatedState = {
+      stocks: [{ id: "stock-2", name: "レビュー" }],
+      timeline: [{
+        id: "task-2",
+        stockId: "stock-2",
+        nameSnapshot: "レビュー",
+        seconds: 900,
+      }],
+    };
+    const updateDocument = await handleRequest(
+      new Request(`http://localhost/api/documents/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: "更新プラン", state: updatedState }),
+      }),
+      { kv },
+    );
+    assert(updateDocument.status === 200, "a timer document should update");
+
+    const documents = await handleRequest(
+      new Request("http://localhost/api/documents"),
+      { kv },
+    );
+    const documentList = (await documents.json()).documents;
+    assert(
+      documentList.some((document: { id: string; name: string }) =>
+        document.id === created.id && document.name === "更新プラン"
+      ),
+      "saved timer documents should be listed",
+    );
+
+    const loadedDocument = await handleRequest(
+      new Request(`http://localhost/api/documents/${created.id}`),
+      { kv },
+    );
+    const loaded = (await loadedDocument.json()).document;
+    assert(
+      loaded.name === "更新プラン" &&
+        JSON.stringify(loaded.state) === JSON.stringify(updatedState),
+      "the entire saved document should reopen after an update",
+    );
+
+    const chatHealth = await handleRequest(
+      new Request("http://localhost/api/chat/health"),
+      { kv },
+    );
+    assert(
+      chatHealth.status === 200,
+      "chat routing should remain available after timer document operations",
+    );
+  } finally {
+    kv.close();
+  }
 });
 
 Deno.test("chat authentication routes use the configured handler", async () => {

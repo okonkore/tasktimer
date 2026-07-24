@@ -918,7 +918,10 @@ async function refreshLatestMessages(state) {
       state.messages,
       validMessages(result.body.messages),
     );
-    state.nextBefore = state.nextBefore ?? result.body.nextBefore;
+    // Rebase paging on the refreshed latest page. If more than one page was
+    // posted while SSE was disconnected, retaining the old cursor would leave
+    // an unreachable gap between the old history and the new latest 50.
+    state.nextBefore = result.body.nextBefore;
     renderMessageHistory(state);
     if (nearBottom) {
       scroll.scrollTop = scroll.scrollHeight;

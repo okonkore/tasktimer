@@ -314,6 +314,10 @@ Deno.test("profile email notification setting requires CSRF and only accepts boo
       "public profile should return the saved setting",
     );
     assert(
+      body.needsProfile === true,
+      "notification preferences alone must not complete initial profile setup",
+    );
+    assert(
       (await repository.getUser("user-1"))?.emailNotificationsEnabled === false,
       "setting should persist",
     );

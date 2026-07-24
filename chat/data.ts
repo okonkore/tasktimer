@@ -225,6 +225,12 @@ export const chatKeys = Object.freeze({
     roomId,
     messageId,
   ],
+  messageEvent: (roomId: string, messageId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "messageEvents",
+    roomId,
+    messageId,
+  ],
   readPosition: (roomId: string, userId: string): Deno.KvKey => [
     ...chatPrefix,
     "readPositions",
@@ -526,13 +532,13 @@ export class ChatRepository {
 
   async listRoomIdsByMember(
     userId: string,
-    limit = chatLimits.maxOwnedRooms + chatLimits.maxRoomMembers,
+    limit?: number,
   ): Promise<string[]> {
     const roomIds: string[] = [];
-    const entries = this.kv.list<string>(
-      { prefix: ["chat", "roomsByMember", userId] },
-      { limit: Math.max(1, Math.floor(limit)) },
-    );
+    const selector = { prefix: ["chat", "roomsByMember", userId] };
+    const entries = limit === undefined
+      ? this.kv.list<string>(selector)
+      : this.kv.list<string>(selector, { limit: pageSize(limit) });
     for await (const entry of entries) roomIds.push(entry.value);
     return roomIds;
   }
@@ -635,6 +641,7 @@ export class ChatRepository {
     }
     await this.#deletePrefix(["chat", "requests", roomId]);
     await this.#deletePrefix(["chat", "messages", roomId]);
+    await this.#deletePrefix(["chat", "messageEvents", roomId]);
     await this.#deletePrefix(["chat", "readPositions", roomId]);
 
     const notifications = this.kv.list<Notification>({
@@ -963,15 +970,17 @@ export class ChatRepository {
   async listJoinRequests(
     roomId: string,
     status?: JoinRequestStatus,
-    limit = chatLimits.maxRoomMembers,
+    limit?: number,
   ): Promise<JoinRequest[]> {
     const requests: JoinRequest[] = [];
-    const entries = this.kv.list<JoinRequest>(
-      { prefix: ["chat", "requests", roomId] },
-      { limit: Math.max(1, Math.floor(limit)) },
-    );
+    const entries = this.kv.list<JoinRequest>({
+      prefix: ["chat", "requests", roomId],
+    });
     for await (const entry of entries) {
-      if (!status || entry.value.status === status) requests.push(entry.value);
+      if (!status || entry.value.status === status) {
+        requests.push(entry.value);
+        if (limit !== undefined && requests.length >= pageSize(limit)) break;
+      }
     }
     requests.sort((left, right) =>
       left.requestedAt.localeCompare(right.requestedAt)
@@ -1163,7 +1172,14 @@ export class ChatRepository {
         { key: messageKey, versionstamp: null },
       )
       .set(messageKey, message);
-    operation = (await this.#appendEvent(operation, event)).operation;
+    const appended = await this.#appendEvent(operation, event);
+    operation = appended.operation;
+    if (appended.event?.type === "message-created") {
+      const eventIndexKey = chatKeys.messageEvent(message.roomId, message.id);
+      operation = operation
+        .check({ key: eventIndexKey, versionstamp: null })
+        .set(eventIndexKey, appended.event.id);
+    }
     const result = await operation.commit();
     return result.ok;
   }
@@ -1188,6 +1204,10 @@ export class ChatRepository {
     expectedMemberVersionstamp: string,
     event?: ChatEventDraft,
   ): Promise<boolean> {
+    const createdEventEntry = await this.#getMessageCreatedEventEntry(
+      message.roomId,
+      message.id,
+    );
     let operation = this.kv.atomic()
       .check(
         {
@@ -1204,6 +1224,23 @@ export class ChatRepository {
         },
       )
       .set(chatKeys.message(message.roomId, message.id), message);
+    if (createdEventEntry?.value && createdEventEntry.versionstamp) {
+      operation = operation
+        .check({
+          key: createdEventEntry.key,
+          versionstamp: createdEventEntry.versionstamp,
+        })
+        .set(
+          createdEventEntry.key,
+          {
+            ...createdEventEntry.value,
+            payload: {
+              ...createdEventEntry.value.payload,
+              body: null,
+            },
+          } satisfies ChatEvent,
+        );
+    }
     operation = (await this.#appendEvent(operation, event)).operation;
     const result = await operation.commit();
     return result.ok;
@@ -1351,7 +1388,10 @@ export class ChatRepository {
   async #appendEvent(
     operation: Deno.AtomicOperation,
     event?: ChatEventDraft,
-  ): Promise<{ operation: Deno.AtomicOperation }> {
+  ): Promise<{
+    operation: Deno.AtomicOperation;
+    event?: ChatEvent;
+  }> {
     if (!event) return { operation };
     const sequenceKey = chatKeys.eventSequence();
     const sequenceEntry = await this.kv.get<Deno.KvU64>(sequenceKey);
@@ -1370,7 +1410,36 @@ export class ChatRepository {
         .set(sequenceKey, new Deno.KvU64(next))
         .check({ key: chatKeys.event(persisted.id), versionstamp: null })
         .set(chatKeys.event(persisted.id), persisted),
+      event: persisted,
     };
+  }
+
+  async #getMessageCreatedEventEntry(
+    roomId: string,
+    messageId: string,
+  ): Promise<Deno.KvEntryMaybe<ChatEvent> | null> {
+    const eventId = (await this.kv.get<string>(
+      chatKeys.messageEvent(roomId, messageId),
+    )).value;
+    if (eventId) return await this.kv.get<ChatEvent>(chatKeys.event(eventId));
+
+    // Messages created before the event index was introduced are migrated
+    // lazily when deleted, so their body cannot survive in replayable events.
+    const events = this.kv.list<ChatEvent>({ prefix: ["chat", "events"] });
+    for await (const entry of events) {
+      if (
+        entry.value.type === "message-created" &&
+        entry.value.roomId === roomId &&
+        entry.value.payload.messageId === messageId
+      ) {
+        await this.kv.set(
+          chatKeys.messageEvent(roomId, messageId),
+          entry.value.id,
+        );
+        return entry;
+      }
+    }
+    return null;
   }
 
   async #deletePrefix(prefix: Deno.KvKey): Promise<void> {
