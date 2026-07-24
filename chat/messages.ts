@@ -148,6 +148,7 @@ export class ChatMessageService {
     userId: string,
     body: string,
   ): Promise<Response> {
+    let rateLimitConsumed = false;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const [roomEntry, memberEntry] = await Promise.all([
         this.#repository.getRoomEntry(roomId),
@@ -167,6 +168,32 @@ export class ChatMessageService {
       }
 
       const now = this.#now();
+      if (!rateLimitConsumed) {
+        const limit = await this.#repository.consumeRateLimit(
+          "message",
+          userId,
+          now,
+          10 * 1000,
+          chatLimits.maxMessagesPerTenSeconds,
+        );
+        if (!limit.allowed) {
+          const retryAfterSeconds = Math.max(
+            1,
+            Math.ceil(
+              (new Date(limit.retryAt).getTime() - now.getTime()) / 1000,
+            ),
+          );
+          return messageJson(
+            {
+              error: "Message rate limit reached",
+              retryAt: limit.retryAt,
+            },
+            429,
+            { "retry-after": String(retryAfterSeconds) },
+          );
+        }
+        rateLimitConsumed = true;
+      }
       const id = this.#generateMessageId(now);
       if (!isMessageId(id)) continue;
       const message: Message = {

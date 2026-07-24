@@ -209,6 +209,88 @@ Deno.test("message APIs require current membership, CSRF, and writer permission"
   });
 });
 
+Deno.test("message posting enforces ten messages per ten seconds with retry metadata", async () => {
+  await withMessageService(async (
+    { messageHandler, login, createRoom, setNow },
+  ) => {
+    const owner = await login("rate-owner@example.com");
+    const roomId = await createRoom(owner);
+    const path = `/api/chat/rooms/${roomId}/messages`;
+    for (let index = 0; index < 10; index += 1) {
+      const response = await messageHandler(mutation(path, owner, {
+        body: `message ${index}`,
+      }));
+      assert(response.status === 201, "the first ten messages should pass");
+    }
+    const limited = await messageHandler(mutation(path, owner, {
+      body: "message 11",
+    }));
+    const body = await limited.json();
+    assert(limited.status === 429, "the eleventh message must be rejected");
+    assert(
+      body.retryAt === "2026-07-19T12:00:10.000Z",
+      "the limit response should include the exact retry timestamp",
+    );
+    assert(
+      limited.headers.get("retry-after") === "10",
+      "the limit response should include Retry-After",
+    );
+
+    setNow("2026-07-19T12:00:10.000Z");
+    const retried = await messageHandler(mutation(path, owner, {
+      body: "allowed at boundary",
+    }));
+    assert(retried.status === 201, "posting should resume at the boundary");
+  });
+});
+
+Deno.test("HTML message input remains inert data and cannot elevate privileges or cross rooms", async () => {
+  await withMessageService(async (
+    { repository, messageHandler, login, createRoom, addMember },
+  ) => {
+    const firstOwner = await login("first-owner@example.com");
+    const secondOwner = await login("second-owner@example.com");
+    const attacker = await login("attacker@example.com");
+    const firstRoom = await createRoom(firstOwner);
+    const secondRoom = await createRoom(secondOwner);
+    await addMember(firstRoom, attacker, "writer");
+    const payload = "<img src=x onerror=alert(document.cookie)>";
+    const created = await messageHandler(mutation(
+      `/api/chat/rooms/${firstRoom}/messages`,
+      attacker,
+      { body: payload, role: "owner" },
+    ));
+    assert(
+      created.status === 400,
+      "unexpected privilege fields must reject the request",
+    );
+
+    const valid = await messageHandler(mutation(
+      `/api/chat/rooms/${firstRoom}/messages`,
+      attacker,
+      { body: payload },
+    ));
+    assert(valid.status === 201, "HTML-like text should be accepted as text");
+    const storedBody = (await valid.json()).message.body;
+    assert(
+      storedBody === payload,
+      "the API must preserve text without execution",
+    );
+
+    const id = (await repository.listMessages(firstRoom)).messages[0].id;
+    const idor = await messageHandler(mutation(
+      `/api/chat/rooms/${secondRoom}/messages/${id}`,
+      attacker,
+      undefined,
+      "DELETE",
+    ));
+    assert(
+      idor.status === 403 || idor.status === 404,
+      "an attacker must not delete a message through another room",
+    );
+  });
+});
+
 Deno.test("message body validation enforces non-whitespace 1-2000 character text", async () => {
   await withMessageService(async (
     { messageHandler, login, createRoom, addMember },

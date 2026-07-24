@@ -22,6 +22,16 @@ Deno.test("timer and chat routes are served independently", async () => {
   );
   assert(chatResponse.status === 200, "chat route should return 200");
   assert(
+    chatResponse.headers.get("content-security-policy")?.includes(
+      "frame-ancestors 'none'",
+    ),
+    "chat pages should prevent framing and restrict content sources",
+  );
+  assert(
+    chatResponse.headers.get("x-frame-options") === "DENY",
+    "chat pages should include legacy clickjacking protection",
+  );
+  assert(
     (await chatResponse.text()).includes('id="chatApp"'),
     "chat route should serve the interactive chat shell",
   );

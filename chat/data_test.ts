@@ -177,3 +177,43 @@ Deno.test("message repository isolates rooms and paginates newest first", async 
     kv.close();
   }
 });
+
+Deno.test("rate limit consumption is atomic under concurrent requests", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const repository = new ChatRepository(kv);
+    const now = new Date("2026-07-24T12:00:00.000Z");
+    const results = await Promise.all(
+      Array.from(
+        { length: 20 },
+        () =>
+          repository.consumeRateLimit(
+            "security-test",
+            "one-subject",
+            now,
+            10_000,
+            10,
+          ),
+      ),
+    );
+    assert(
+      results.filter((result) => result.allowed).length === 10,
+      "concurrent callers must not exceed the configured limit",
+    );
+    const rejected = results.find((result) => !result.allowed);
+    assert(
+      rejected?.retryAt === "2026-07-24T12:00:10.000Z",
+      "rejected callers should receive an exact retry timestamp",
+    );
+    const boundary = await repository.consumeRateLimit(
+      "security-test",
+      "one-subject",
+      new Date("2026-07-24T12:00:10.000Z"),
+      10_000,
+      10,
+    );
+    assert(boundary.allowed, "the next window should open at the boundary");
+  } finally {
+    kv.close();
+  }
+});

@@ -122,12 +122,14 @@ Deno.test("OTP verification creates a secure 30-day session", async () => {
     });
     await authHandler(request("/api/chat/auth/request-otp", {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "Ada@Example.COM" }),
     }));
     assert(sent.length === 1, "OTP should be delivered");
 
     const response = await authHandler(request("/api/chat/auth/verify-otp", {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "ADA@example.com", code: "123456" }),
     }));
     assert(response.status === 200, "OTP verification should create a session");

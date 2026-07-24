@@ -1,5 +1,6 @@
 import {
   type ChatEventDraft,
+  chatLimits,
   ChatRepository,
   type JoinRequest,
   type Member,
@@ -210,6 +211,7 @@ export class ChatJoinRequestService {
     roomId: string,
     userId: string,
   ): Promise<Response> {
+    let rateLimitConsumed = false;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const [roomEntry, memberEntry, requestEntry] = await Promise.all([
         this.#repository.getRoomEntry(roomId),
@@ -255,6 +257,24 @@ export class ChatJoinRequestService {
             { "retry-after": String(retryAfter) },
           );
         }
+      }
+
+      if (!rateLimitConsumed) {
+        const limit = await this.#repository.consumeRateLimit(
+          "join-request",
+          userId,
+          now,
+          24 * 60 * 60 * 1000,
+          chatLimits.maxJoinRequestsPerDay,
+        );
+        if (!limit.allowed) {
+          return joinRateLimitResponse(
+            "Daily join request limit reached",
+            limit.retryAt,
+            now,
+          );
+        }
+        rateLimitConsumed = true;
       }
 
       const timestamp = now.toISOString();
@@ -440,15 +460,21 @@ export class ChatJoinRequestService {
         createdAt: timestamp,
         payload: { role, visibleFrom: timestamp },
       };
-      if (
-        await this.#repository.approveJoinRequest(
-          joinRequest,
-          member,
-          requestEntry.versionstamp,
-          roomEntry.versionstamp,
-          event,
-        )
-      ) {
+      const result = await this.#repository.approveJoinRequest(
+        joinRequest,
+        member,
+        requestEntry.versionstamp,
+        roomEntry.versionstamp,
+        event,
+      );
+      if (result === "limit") {
+        return joinJson({
+          error: "Room member limit reached",
+          limit: chatLimits.maxRoomMembers,
+          retryAt: null,
+        }, 409);
+      }
+      if (result === "approved") {
         return joinJson({
           request: publicJoinRequest(joinRequest),
           membership: {
@@ -754,4 +780,20 @@ function joinJson(
       ...headers,
     },
   });
+}
+
+function joinRateLimitResponse(
+  error: string,
+  retryAt: string,
+  now: Date,
+): Response {
+  const retryAfterSeconds = Math.max(
+    1,
+    Math.ceil((new Date(retryAt).getTime() - now.getTime()) / 1000),
+  );
+  return joinJson(
+    { error, retryAt },
+    429,
+    { "retry-after": String(retryAfterSeconds) },
+  );
 }

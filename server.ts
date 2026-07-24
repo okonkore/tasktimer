@@ -75,6 +75,7 @@ type TimerDocument = {
 };
 
 export interface RequestDependencies {
+  clientIp?: string;
   chatAuthHandler?: (request: Request) => Promise<Response>;
   chatRoomHandler?: (request: Request) => Promise<Response>;
   chatJoinRequestHandler?: (request: Request) => Promise<Response>;
@@ -106,9 +107,9 @@ export async function handleRequest(
     url.pathname === "/api/chat/auth/logout" ||
     url.pathname === "/api/chat/me"
   ) {
-    return await (dependencies.chatAuthHandler ?? handleProductionChatAuth)(
-      request,
-    );
+    return dependencies.chatAuthHandler
+      ? await dependencies.chatAuthHandler(request)
+      : await handleProductionChatAuth(request, dependencies.clientIp);
   }
 
   if (url.pathname === "/api/chat/events") {
@@ -197,16 +198,22 @@ export async function handleRequest(
           ? "no-cache"
           : "public, max-age=3600",
         "x-content-type-options": "nosniff",
+        "content-security-policy":
+          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "referrer-policy": "same-origin",
+        "x-frame-options": "DENY",
       },
     });
-  } catch (error) {
-    console.error("Failed to serve static file", error);
+  } catch {
+    console.error("Failed to serve a static file");
     return new Response("Internal server error", { status: 500 });
   }
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleRequest(request));
+  Deno.serve((request, info) =>
+    handleRequest(request, { clientIp: info.remoteAddr.hostname })
+  );
 }
 
 let productionChatAuthHandler:
@@ -228,11 +235,17 @@ let productionChatNotificationHandler:
   | ((request: Request) => Promise<Response>)
   | null = null;
 
-async function handleProductionChatAuth(request: Request): Promise<Response> {
+async function handleProductionChatAuth(
+  request: Request,
+  clientIp?: string,
+): Promise<Response> {
   try {
     initializeProductionChatHandlers();
     if (!productionChatAuthHandler) throw new Error("Auth handler unavailable");
-    return await productionChatAuthHandler(request);
+    if (!clientIp) return await productionChatAuthHandler(request);
+    const headers = new Headers(request.headers);
+    headers.set("x-tasktimer-client-ip", clientIp);
+    return await productionChatAuthHandler(new Request(request, { headers }));
   } catch {
     return jsonResponse({ error: "Authentication is not configured" }, 503, {
       "cache-control": "no-store",
@@ -334,6 +347,8 @@ function initializeProductionChatHandlers(): void {
   const otpHandler = createOtpAuthHandler(service, {
     onVerified: (email, verifiedRequest) =>
       sessionService.completeOtpAuthentication(email, verifiedRequest),
+    getClientIp: (request) =>
+      request.headers.get("x-tasktimer-client-ip") ?? "unavailable",
   });
   const sessionHandler = createSessionAuthHandler(sessionService);
   productionChatAuthHandler = (authRequest) => {

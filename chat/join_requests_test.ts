@@ -221,6 +221,98 @@ Deno.test("unapproved users cannot read room contents and requests require authe
   );
 });
 
+Deno.test("join requests enforce ten submissions per user per day", async () => {
+  await withJoinService(async (
+    { joinHandler, login, createRoom },
+  ) => {
+    const owner = await login("many-rooms-owner@example.com");
+    const applicant = await login("limited-applicant@example.com");
+    const roomIds: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      roomIds.push(await createRoom(owner));
+    }
+    for (const roomId of roomIds.slice(0, 10)) {
+      const response = await joinHandler(mutation(
+        `/api/chat/rooms/${roomId}/requests`,
+        applicant,
+      ));
+      assert(response.status === 201, "the first ten requests should pass");
+    }
+    const limited = await joinHandler(mutation(
+      `/api/chat/rooms/${roomIds[10]}/requests`,
+      applicant,
+    ));
+    const body = await limited.json();
+    assert(limited.status === 429, "the eleventh request must be limited");
+    assert(
+      body.retryAt === "2026-07-20T12:00:00.000Z",
+      "the response should include the next allowed time",
+    );
+    assert(
+      limited.headers.get("retry-after") === "86400",
+      "the response should include Retry-After",
+    );
+  });
+});
+
+Deno.test("room approval atomically enforces the one-hundred-member limit", async () => {
+  await withJoinService(async (
+    { repository, joinHandler, login, createRoom },
+  ) => {
+    const owner = await login("capacity-owner@example.com");
+    const finalMember = await login("member-100@example.com");
+    const overflow = await login("member-101@example.com");
+    const roomId = await createRoom(owner);
+    const requestsPath = `/api/chat/rooms/${roomId}/requests`;
+    await joinHandler(mutation(requestsPath, finalMember));
+    await joinHandler(mutation(requestsPath, overflow));
+    const timestamp = "2026-07-19T12:00:00.000Z";
+    for (let index = 0; index < 98; index += 1) {
+      await repository.setMember({
+        roomId,
+        userId: `existing-${index}`,
+        role: "viewer",
+        visibleFrom: timestamp,
+        joinedAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
+
+    const [first, second] = await Promise.all([
+      joinHandler(mutation(
+        `${requestsPath}/${finalMember.userId}/approve`,
+        owner,
+        { role: "viewer" },
+      )),
+      joinHandler(mutation(
+        `${requestsPath}/${overflow.userId}/approve`,
+        owner,
+        { role: "writer" },
+      )),
+    ]);
+    const [approved, full] = [first, second].sort((left, right) =>
+      left.status - right.status
+    );
+    assert(approved.status === 200, "one hundredth member should be approved");
+    const body = await full.json();
+    assert(full.status === 409, "the hundred-and-first member must be refused");
+    assert(body.limit === 100, "the capacity response should state the limit");
+    assert(body.retryAt === null, "capacity has no predictable retry time");
+    assert(
+      await repository.countMembers(roomId) === 100,
+      "concurrent approvals must never exceed room capacity",
+    );
+    const acceptedApplicants = [
+      await repository.getMember(roomId, finalMember.userId),
+      await repository.getMember(roomId, overflow.userId),
+    ].filter(Boolean);
+    assert(
+      acceptedApplicants.length === 1,
+      "exactly one concurrent applicant may gain membership",
+    );
+  });
+});
+
 Deno.test("a join request notifies an enabled owner once without exposing email in mail content", async () => {
   await withJoinService(async (
     { repository, joinHandler, login, createRoom, sentMails },

@@ -1,10 +1,16 @@
-import { ChatRepository, normalizeEmail, type OtpChallenge } from "./data.ts";
+import {
+  chatLimits,
+  ChatRepository,
+  normalizeEmail,
+  type OtpChallenge,
+} from "./data.ts";
 
 export const otpPolicy = Object.freeze({
   codeDigits: 6,
   expiresInMilliseconds: 10 * 60 * 1000,
   resendCooldownMilliseconds: 60 * 1000,
   maxFailedAttempts: 5,
+  requestWindowMilliseconds: 60 * 60 * 1000,
 });
 
 const maxAuthRequestBytes = 8 * 1024;
@@ -75,7 +81,12 @@ export interface OtpAuthServiceOptions {
 
 export type RequestOtpResult =
   | { status: "sent" }
-  | { status: "cooldown"; retryAfterSeconds: number }
+  | { status: "cooldown"; retryAfterSeconds: number; retryAt: string }
+  | {
+    status: "rate-limited";
+    reason: "email" | "ip";
+    retryAt: string;
+  }
   | { status: "delivery-failed" }
   | { status: "temporary-error" };
 
@@ -102,7 +113,10 @@ export class OtpAuthService {
     this.#generateCode = options.generateCode ?? generateOtpCode;
   }
 
-  async requestOtp(email: string): Promise<RequestOtpResult> {
+  async requestOtp(
+    email: string,
+    clientIp = "unavailable",
+  ): Promise<RequestOtpResult> {
     const normalizedEmail = normalizeEmail(email);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -114,7 +128,42 @@ export class OtpAuthService {
         ? resendRetryAfterSeconds(entry.value, now)
         : 0;
       if (retryAfterSeconds > 0) {
-        return { status: "cooldown", retryAfterSeconds };
+        return {
+          status: "cooldown",
+          retryAfterSeconds,
+          retryAt: new Date(
+            now.getTime() + retryAfterSeconds * 1000,
+          ).toISOString(),
+        };
+      }
+
+      const ipLimit = await this.#repository.consumeRateLimit(
+        "otp-ip",
+        await hashOtp(this.#authSecret, "rate-ip", clientIp),
+        now,
+        otpPolicy.requestWindowMilliseconds,
+        chatLimits.maxOtpRequestsPerIpHour,
+      );
+      if (!ipLimit.allowed) {
+        return {
+          status: "rate-limited",
+          reason: "ip",
+          retryAt: ipLimit.retryAt,
+        };
+      }
+      const emailLimit = await this.#repository.consumeRateLimit(
+        "otp-email",
+        await hashOtp(this.#authSecret, "rate-email", normalizedEmail),
+        now,
+        otpPolicy.requestWindowMilliseconds,
+        chatLimits.maxOtpRequestsPerEmailHour,
+      );
+      if (!emailLimit.allowed) {
+        return {
+          status: "rate-limited",
+          reason: "email",
+          retryAt: emailLimit.retryAt,
+        };
       }
 
       const code = this.#generateCode();
@@ -234,9 +283,27 @@ export function createOtpAuthHandler(
     if (request.method !== "POST") {
       return authJson({ error: "Method not allowed" }, 405, { Allow: "POST" });
     }
+    if (
+      request.headers.get("content-type")?.split(";")[0].trim()
+        .toLowerCase() !==
+        "application/json"
+    ) {
+      return authJson({ error: "Content-Type must be application/json" }, 415);
+    }
 
     const body = await readAuthJson(request);
     if (body instanceof Response) return body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return authJson({ error: "Invalid authentication request" }, 400);
+    }
+    const allowedKeys = isRequestRoute ? ["email"] : ["email", "code"];
+    if (
+      Object.keys(body as Record<string, unknown>).some((key) =>
+        !allowedKeys.includes(key)
+      )
+    ) {
+      return authJson({ error: "Invalid authentication request" }, 400);
+    }
     const email = body && typeof body === "object"
       ? (body as Record<string, unknown>).email
       : undefined;
@@ -245,7 +312,10 @@ export function createOtpAuthHandler(
     }
 
     if (isRequestRoute) {
-      const result = await service.requestOtp(email);
+      const result = await service.requestOtp(
+        email,
+        options.getClientIp?.(request) ?? "unavailable",
+      );
       if (result.status === "sent") {
         return authJson({
           ok: true,
@@ -257,12 +327,33 @@ export function createOtpAuthHandler(
           {
             error: "Please wait before requesting another code",
             retryAfterSeconds: result.retryAfterSeconds,
+            retryAt: result.retryAt,
           },
           429,
           { "retry-after": String(result.retryAfterSeconds) },
         );
       }
-      return authJson({ error: "Could not send a login code" }, 503);
+      if (result.status === "rate-limited") {
+        return rateLimitResponse(
+          result.reason === "email"
+            ? "Too many login codes were requested for this address"
+            : "Too many login codes were requested from this network",
+          result.retryAt,
+        );
+      }
+      // Delivery failures deliberately have the same response as successful
+      // requests so the endpoint cannot be used to enumerate deliverable or
+      // registered addresses.
+      if (result.status === "delivery-failed") {
+        return authJson({
+          ok: true,
+          message: "If the address can receive email, a code has been sent",
+        }, 202);
+      }
+      return authJson(
+        { error: "Authentication is temporarily unavailable" },
+        503,
+      );
     }
 
     const code = (body as Record<string, unknown>).code;
@@ -288,6 +379,19 @@ export function createOtpAuthHandler(
 
 export interface OtpAuthHandlerOptions {
   onVerified?: (email: string, request: Request) => Promise<Response>;
+  getClientIp?: (request: Request) => string;
+}
+
+function rateLimitResponse(error: string, retryAt: string): Response {
+  const retryAfterSeconds = Math.max(
+    1,
+    Math.ceil((new Date(retryAt).getTime() - Date.now()) / 1000),
+  );
+  return authJson(
+    { error, retryAt },
+    429,
+    { "retry-after": String(retryAfterSeconds) },
+  );
 }
 
 function resendRetryAfterSeconds(challenge: OtpChallenge, now: Date): number {

@@ -63,7 +63,10 @@ async function withAuth(
       kv,
       repository,
       mailer,
-      handler: createOtpAuthHandler(service),
+      handler: createOtpAuthHandler(service, {
+        getClientIp: (request) =>
+          request.headers.get("x-test-client-ip") ?? "test-client",
+      }),
       setNow: (value) => currentTime = new Date(value),
     });
   } finally {
@@ -254,19 +257,133 @@ Deno.test("verification errors do not reveal whether a challenge exists", async 
   });
 });
 
-Deno.test("mail delivery failure removes the unusable challenge", async () => {
+Deno.test("mail delivery failure is indistinguishable from success and removes the unusable challenge", async () => {
   await withAuth(async ({ repository, mailer, handler }) => {
     mailer.shouldFail = true;
     const response = await post(handler, "/api/chat/auth/request-otp", {
       email: "failed@example.com",
     });
     assert(
-      response.status === 503,
-      "delivery failure should be reported safely",
+      response.status === 202,
+      "delivery failure must use the generic accepted response",
     );
+    assertEquals(await response.json(), {
+      ok: true,
+      message: "If the address can receive email, a code has been sent",
+    }, "delivery result must not enable email enumeration");
     assert(
       await repository.getOtpChallenge("failed@example.com") === null,
       "unsent OTP challenge should be removed",
+    );
+  });
+});
+
+Deno.test("OTP requests are limited per email with a retry timestamp", async () => {
+  await withAuth(async ({ handler, mailer, setNow }) => {
+    const base = new Date("2026-07-24T00:00:00.000Z");
+    for (
+      let index = 0;
+      index < 5;
+      index += 1
+    ) {
+      setNow(new Date(base.getTime() + index * 61_000));
+      const response = await post(handler, "/api/chat/auth/request-otp", {
+        email: "limited@example.com",
+      });
+      assert(response.status === 202, "the first five requests should pass");
+    }
+    setNow(new Date(base.getTime() + 5 * 61_000));
+    const limited = await post(handler, "/api/chat/auth/request-otp", {
+      email: "limited@example.com",
+    });
+    const body = await limited.json();
+    assert(limited.status === 429, "the sixth request must be rate limited");
+    assert(
+      body.retryAt === "2026-07-24T01:00:00.000Z",
+      "the response should expose the retry timestamp",
+    );
+    assert(
+      mailer.messages.length === 5,
+      "a limited request must not send mail",
+    );
+  }, ["123456", "223456", "323456", "423456", "523456"]);
+});
+
+Deno.test("OTP requests are limited per client IP across email addresses", async () => {
+  await withAuth(async ({ handler, setNow }) => {
+    const base = new Date("2026-07-24T00:00:00.000Z");
+    for (let index = 0; index < 20; index += 1) {
+      setNow(new Date(base.getTime() + index * 1_000));
+      const response = await handler(
+        new Request(
+          "http://localhost/api/chat/auth/request-otp",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-test-client-ip": "203.0.113.7",
+            },
+            body: JSON.stringify({ email: `person-${index}@example.com` }),
+          },
+        ),
+      );
+      assert(
+        response.status === 202,
+        "requests within the IP limit should pass",
+      );
+    }
+    setNow(new Date(base.getTime() + 20_000));
+    const limited = await handler(
+      new Request(
+        "http://localhost/api/chat/auth/request-otp",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-client-ip": "203.0.113.7",
+          },
+          body: JSON.stringify({ email: "blocked@example.com" }),
+        },
+      ),
+    );
+    const body = await limited.json();
+    assert(limited.status === 429, "the IP-wide limit must be enforced");
+    assert(
+      typeof body.retryAt === "string",
+      "the IP limit should include a retry timestamp",
+    );
+  });
+});
+
+Deno.test("authentication input rejects unexpected fields without reflecting secrets", async () => {
+  await withAuth(async ({ handler }) => {
+    const injected = "<img src=x onerror=alert(1)>";
+    const response = await post(handler, "/api/chat/auth/request-otp", {
+      email: "safe@example.com",
+      admin: true,
+      otp: injected,
+    });
+    const text = await response.text();
+    assert(response.status === 400, "unexpected fields should be rejected");
+    assert(!text.includes(injected), "attacker input must not be reflected");
+    assert(!text.includes("safe@example.com"), "email must not be reflected");
+
+    const crossSiteSimpleRequest = await handler(
+      new Request(
+        "http://localhost/api/chat/auth/verify-otp",
+        {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: JSON.stringify({
+            email: "safe@example.com",
+            code: "123456",
+          }),
+        },
+      ),
+    );
+    assert(
+      crossSiteSimpleRequest.status === 415,
+      "simple cross-site content types must not create login sessions",
     );
   });
 });

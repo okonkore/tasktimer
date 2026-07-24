@@ -62,6 +62,10 @@ interface RoomOwnerCount {
   count: number;
 }
 
+interface RoomMemberCount {
+  count: number;
+}
+
 export interface Member {
   roomId: string;
   userId: string;
@@ -142,6 +146,10 @@ export interface RateLimitWindow {
 export const chatLimits = Object.freeze({
   maxOwnedRooms: 20,
   maxRoomMembers: 100,
+  maxJoinRequestsPerDay: 10,
+  maxMessagesPerTenSeconds: 10,
+  maxOtpRequestsPerEmailHour: 5,
+  maxOtpRequestsPerIpHour: 20,
   defaultPageSize: 50,
   maxPageSize: 100,
   maxMessageLength: 2_000,
@@ -183,6 +191,11 @@ export const chatKeys = Object.freeze({
     ...chatPrefix,
     "roomOwnerCounts",
     ownerId,
+  ],
+  roomMemberCount: (roomId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "roomMemberCounts",
+    roomId,
   ],
   roomDeletion: (roomId: string): Deno.KvKey => [
     ...chatPrefix,
@@ -295,6 +308,10 @@ export interface MessagePage {
   messages: Message[];
   nextBefore: string | null;
 }
+
+export type RateLimitResult =
+  | { allowed: true; retryAt: IsoDateTime }
+  | { allowed: false; retryAt: IsoDateTime };
 
 export class ChatRepository {
   constructor(private readonly kv: Deno.Kv) {}
@@ -460,6 +477,7 @@ export class ChatRepository {
     const ownerMemberKey = chatKeys.member(room.id, room.ownerId);
     const memberIndexKey = chatKeys.roomByMember(room.ownerId, room.id);
     const countKey = chatKeys.roomOwnerCount(room.ownerId);
+    const memberCountKey = chatKeys.roomMemberCount(room.id);
     const accountDeletionKey = chatKeys.accountDeletion(room.ownerId);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -474,6 +492,7 @@ export class ChatRepository {
           { key: ownerMemberKey, versionstamp: null },
           { key: memberIndexKey, versionstamp: null },
           { key: countKey, versionstamp: countEntry.versionstamp },
+          { key: memberCountKey, versionstamp: null },
           { key: accountDeletionKey, versionstamp: null },
         )
         .set(roomKey, room)
@@ -481,6 +500,7 @@ export class ChatRepository {
         .set(ownerMemberKey, owner)
         .set(memberIndexKey, room.id)
         .set(countKey, { count: count + 1 } satisfies RoomOwnerCount)
+        .set(memberCountKey, { count: 1 } satisfies RoomMemberCount)
         .commit();
       if (result.ok) return "created";
     }
@@ -571,7 +591,8 @@ export class ChatRepository {
       .delete(chatKeys.room(room.id))
       .delete(chatKeys.roomByOwner(room.ownerId, room.id))
       .delete(chatKeys.member(room.id, room.ownerId))
-      .delete(chatKeys.roomByMember(room.ownerId, room.id));
+      .delete(chatKeys.roomByMember(room.ownerId, room.id))
+      .delete(chatKeys.roomMemberCount(room.id));
     operation = count === 1
       ? operation.delete(countKey)
       : operation.set(countKey, { count: count - 1 } satisfies RoomOwnerCount);
@@ -687,10 +708,9 @@ export class ChatRepository {
     });
     for await (const entry of memberships) {
       const roomId = entry.value;
-      await this.kv.delete(chatKeys.member(roomId, userId));
+      await this.#deleteMembership(roomId, userId);
       await this.kv.delete(chatKeys.request(roomId, userId));
       await this.kv.delete(chatKeys.readPosition(roomId, userId));
-      await this.kv.delete(entry.key);
     }
     const requests = this.kv.list<JoinRequest>({
       prefix: ["chat", "requests"],
@@ -786,10 +806,36 @@ export class ChatRepository {
   }
 
   async setMember(member: Member): Promise<void> {
-    await this.kv.atomic()
-      .set(chatKeys.member(member.roomId, member.userId), member)
-      .set(chatKeys.roomByMember(member.userId, member.roomId), member.roomId)
-      .commit();
+    const memberKey = chatKeys.member(member.roomId, member.userId);
+    const indexKey = chatKeys.roomByMember(member.userId, member.roomId);
+    const countKey = chatKeys.roomMemberCount(member.roomId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [memberEntry, countEntry] = await Promise.all([
+        this.kv.get<Member>(memberKey),
+        this.kv.get<RoomMemberCount>(countKey),
+      ]);
+      const count = countEntry.value?.count ??
+        await this.countMembers(member.roomId);
+      if (!memberEntry.value && count >= chatLimits.maxRoomMembers) {
+        throw new Error("Room member limit reached");
+      }
+      const result = await this.kv.atomic()
+        .check(
+          { key: memberKey, versionstamp: memberEntry.versionstamp },
+          { key: countKey, versionstamp: countEntry.versionstamp },
+        )
+        .set(memberKey, member)
+        .set(indexKey, member.roomId)
+        .set(
+          countKey,
+          {
+            count: memberEntry.value ? count : count + 1,
+          } satisfies RoomMemberCount,
+        )
+        .commit();
+      if (result.ok) return;
+    }
+    throw new Error("Could not set room membership");
   }
 
   async getMember(roomId: string, userId: string): Promise<Member | null> {
@@ -865,6 +911,11 @@ export class ChatRepository {
       request.userId,
       request.roomId,
     );
+    const countKey = chatKeys.roomMemberCount(request.roomId);
+    const countEntry = await this.kv.get<RoomMemberCount>(countKey);
+    const count = countEntry.value?.count ??
+      await this.countMembers(request.roomId);
+    if (count < 2) return false;
     let operation = this.kv.atomic()
       .check(
         {
@@ -876,10 +927,12 @@ export class ChatRepository {
           versionstamp: expectedRequestVersionstamp,
         },
         { key: memberKey, versionstamp: expectedMemberVersionstamp },
+        { key: countKey, versionstamp: countEntry.versionstamp },
       )
       .set(chatKeys.request(request.roomId, request.userId), request)
       .delete(memberKey)
-      .delete(memberIndexKey);
+      .delete(memberIndexKey)
+      .set(countKey, { count: count - 1 } satisfies RoomMemberCount);
     operation = (await this.#appendEvent(operation, event)).operation;
     const result = await operation.commit();
     return result.ok;
@@ -975,9 +1028,14 @@ export class ChatRepository {
     expectedRequestVersionstamp: string,
     expectedRoomVersionstamp: string,
     event?: ChatEventDraft,
-  ): Promise<boolean> {
+  ): Promise<"approved" | "limit" | "conflict"> {
     const memberKey = chatKeys.member(member.roomId, member.userId);
     const memberIndexKey = chatKeys.roomByMember(member.userId, member.roomId);
+    const countKey = chatKeys.roomMemberCount(member.roomId);
+    const countEntry = await this.kv.get<RoomMemberCount>(countKey);
+    const count = countEntry.value?.count ??
+      await this.countMembers(member.roomId);
+    if (count >= chatLimits.maxRoomMembers) return "limit";
     let operation = this.kv.atomic()
       .check(
         {
@@ -994,13 +1052,64 @@ export class ChatRepository {
           key: chatKeys.accountDeletion(member.userId),
           versionstamp: null,
         },
+        { key: countKey, versionstamp: countEntry.versionstamp },
       )
       .set(chatKeys.request(request.roomId, request.userId), request)
       .set(memberKey, member)
-      .set(memberIndexKey, member.roomId);
+      .set(memberIndexKey, member.roomId)
+      .set(countKey, { count: count + 1 } satisfies RoomMemberCount);
     operation = (await this.#appendEvent(operation, event)).operation;
     const result = await operation.commit();
-    return result.ok;
+    return result.ok ? "approved" : "conflict";
+  }
+
+  async consumeRateLimit(
+    category: string,
+    subject: string,
+    now: Date,
+    windowMilliseconds: number,
+    limit: number,
+  ): Promise<RateLimitResult> {
+    if (
+      !category || !subject || !Number.isFinite(now.getTime()) ||
+      !Number.isInteger(windowMilliseconds) || windowMilliseconds < 1 ||
+      !Number.isInteger(limit) || limit < 1
+    ) {
+      throw new TypeError("Invalid rate limit configuration");
+    }
+    const key = chatKeys.rateLimit(category, subject, "active");
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const entry = await this.kv.get<RateLimitWindow>(key);
+      const storedExpiry = entry.value
+        ? new Date(entry.value.expiresAt).getTime()
+        : Number.NaN;
+      const expired = !Number.isFinite(storedExpiry) ||
+        now.getTime() >= storedExpiry;
+      const retryAt = expired
+        ? new Date(now.getTime() + windowMilliseconds)
+        : new Date(storedExpiry);
+      if (!expired && entry.value!.count >= limit) {
+        return { allowed: false, retryAt: retryAt.toISOString() };
+      }
+      const next: RateLimitWindow = {
+        count: expired ? 1 : entry.value!.count + 1,
+        windowStartedAt: expired
+          ? now.toISOString()
+          : entry.value!.windowStartedAt,
+        expiresAt: retryAt.toISOString(),
+      };
+      const result = await this.kv.atomic()
+        .check({ key, versionstamp: entry.versionstamp })
+        .set(key, next, { expireIn: windowMilliseconds })
+        .commit();
+      if (result.ok) return { allowed: true, retryAt: next.expiresAt };
+    }
+    // Contention is treated conservatively so concurrent requests cannot
+    // bypass a limit.
+    return {
+      allowed: false,
+      retryAt: new Date(now.getTime() + windowMilliseconds).toISOString(),
+    };
   }
 
   async rejectJoinRequest(
@@ -1267,5 +1376,37 @@ export class ChatRepository {
   async #deletePrefix(prefix: Deno.KvKey): Promise<void> {
     const entries = this.kv.list({ prefix });
     for await (const entry of entries) await this.kv.delete(entry.key);
+  }
+
+  async #deleteMembership(roomId: string, userId: string): Promise<void> {
+    const memberKey = chatKeys.member(roomId, userId);
+    const indexKey = chatKeys.roomByMember(userId, roomId);
+    const countKey = chatKeys.roomMemberCount(roomId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [memberEntry, countEntry] = await Promise.all([
+        this.kv.get<Member>(memberKey),
+        this.kv.get<RoomMemberCount>(countKey),
+      ]);
+      if (!memberEntry.value) {
+        await this.kv.delete(indexKey);
+        return;
+      }
+      const count = countEntry.value?.count ?? await this.countMembers(roomId);
+      const operation = this.kv.atomic()
+        .check(
+          { key: memberKey, versionstamp: memberEntry.versionstamp },
+          { key: countKey, versionstamp: countEntry.versionstamp },
+        )
+        .delete(memberKey)
+        .delete(indexKey);
+      const result = count <= 1
+        ? await operation.delete(countKey).commit()
+        : await operation.set(
+          countKey,
+          { count: count - 1 } satisfies RoomMemberCount,
+        ).commit();
+      if (result.ok) return;
+    }
+    throw new Error("Could not remove room membership");
   }
 }

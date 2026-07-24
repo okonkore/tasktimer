@@ -96,10 +96,10 @@ export class ChatEventService {
           },
         ).then(() => {
           if (!cancelled) controller.close();
-        }).catch((error) => {
+        }).catch(() => {
           if (!cancelled && !abortController.signal.aborted) {
-            console.error("Chat event stream failed", error);
-            controller.error(error);
+            console.error("Chat event stream failed");
+            controller.error(new Error("Chat event stream failed"));
           }
         }).finally(() => {
           request.signal.removeEventListener("abort", stop);
