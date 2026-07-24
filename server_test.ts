@@ -39,6 +39,18 @@ Deno.test("timer and chat routes are served independently", async () => {
     (await chatResponse.text()).includes('id="chatApp"'),
     "chat route should serve the interactive chat shell",
   );
+
+  const versionedClient = await handleRequest(
+    new Request("http://localhost/chat/client.js?v=20260724-password-auth"),
+  );
+  assert(
+    versionedClient.status === 200,
+    "versioned client asset should resolve",
+  );
+  assert(
+    (await versionedClient.text()).includes("renderPasswordAuth"),
+    "versioned client should serve the current chat implementation",
+  );
 });
 
 Deno.test("chat health endpoint is available", async () => {
