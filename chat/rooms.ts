@@ -180,6 +180,53 @@ export class ChatRoomService {
     return "conflict";
   }
 
+  async deleteRoom(
+    authenticated: AuthenticatedChatRequest,
+    roomId: string,
+    confirmationName: string,
+  ): Promise<
+    "deleted" | "not-found" | "forbidden" | "name-mismatch" | "conflict"
+  > {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const entry = await this.#repository.getRoomEntry(roomId);
+      if (!entry.value || !entry.versionstamp) {
+        const deletion = await this.#repository.getRoomDeletion(roomId);
+        if (!deletion) return "not-found";
+        if (deletion.ownerId !== authenticated.user.id) return "forbidden";
+        // Always sweep again, even after a previous completion marker. This
+        // keeps retries safe if an earlier large scan was interrupted or if a
+        // stale in-flight mutation briefly recreated an associated index.
+        await this.#repository.deleteRoomAssociatedData(roomId);
+        if (!deletion.completedAt) {
+          await this.#repository.finishRoomDeletion(
+            deletion,
+            this.#now().toISOString(),
+          );
+        }
+        return "deleted";
+      }
+      if (entry.value.ownerId !== authenticated.user.id) return "forbidden";
+      if (confirmationName !== entry.value.name) return "name-mismatch";
+      if (
+        await this.#repository.beginRoomDeletion(
+          entry.value,
+          entry.versionstamp,
+          this.#now().toISOString(),
+        )
+      ) {
+        const deletion = await this.#repository.getRoomDeletion(roomId);
+        if (!deletion) return "conflict";
+        await this.#repository.deleteRoomAssociatedData(roomId);
+        await this.#repository.finishRoomDeletion(
+          deletion,
+          this.#now().toISOString(),
+        );
+        return "deleted";
+      }
+    }
+    return "conflict";
+  }
+
   handler(): (request: Request) => Promise<Response> {
     return (request) => this.handle(request);
   }
@@ -268,8 +315,43 @@ export class ChatRoomService {
       return roomJson({ room: result });
     }
 
+    if (request.method === "DELETE") {
+      const authenticated = await requireChatMutation(request, this.#sessions);
+      if (authenticated instanceof Response) return authenticated;
+      const confirmationName = await roomDeleteInputFromRequest(request);
+      if (confirmationName instanceof Response) return confirmationName;
+      try {
+        const result = await this.deleteRoom(
+          authenticated,
+          roomId,
+          confirmationName,
+        );
+        if (result === "not-found") {
+          return roomJson({ error: "Room not found" }, 404);
+        }
+        if (result === "forbidden") {
+          return roomJson(
+            { error: "Only the owner can delete this room" },
+            403,
+          );
+        }
+        if (result === "name-mismatch") {
+          return roomJson({ error: "Room name does not match" }, 400);
+        }
+        if (result === "conflict") {
+          return roomJson({ error: "Could not delete room" }, 503);
+        }
+        return roomJson({ ok: true });
+      } catch {
+        return roomJson(
+          { error: "Room deletion is incomplete; retry the request" },
+          503,
+        );
+      }
+    }
+
     return roomJson({ error: "Method not allowed" }, 405, {
-      Allow: "GET, PATCH",
+      Allow: "GET, PATCH, DELETE",
     });
   }
 }
@@ -330,6 +412,25 @@ async function roomInputFromRequest(
     );
   }
   return { name, description };
+}
+
+async function roomDeleteInputFromRequest(
+  request: Request,
+): Promise<string | Response> {
+  const value = await readRoomJson(request);
+  if (value instanceof Response) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return roomJson({ error: "Room name confirmation is required" }, 400);
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    Object.keys(candidate).length !== 1 ||
+    typeof candidate.confirmationName !== "string" ||
+    candidate.confirmationName.length > 50
+  ) {
+    return roomJson({ error: "Invalid room name confirmation" }, 400);
+  }
+  return candidate.confirmationName;
 }
 
 async function readRoomJson(request: Request): Promise<unknown | Response> {

@@ -477,6 +477,26 @@ button.danger:hover {
   background: #ffe4e4;
 }
 
+.danger-zone {
+  display: grid;
+  gap: 10px;
+  margin-top: 28px;
+  padding: 18px;
+  border: 1px solid #d9a4a4;
+  border-radius: 10px;
+  background: #fffafa;
+}
+
+.danger-zone h2,
+.danger-zone p {
+  margin: 0;
+}
+
+.danger-zone h2 {
+  color: #8f2828;
+  font-size: 19px;
+}
+
 .room-badges {
   display: flex;
   flex-wrap: wrap;

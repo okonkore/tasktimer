@@ -74,7 +74,10 @@ export class ChatSessionService {
       }
 
       const user = await this.#getOrCreateUser(email);
-      if (user.deletedAt) {
+      if (
+        user.deletedAt ||
+        await this.#repository.getAccountDeletion(user.id)
+      ) {
         return sessionJson({ error: "Account is unavailable" }, 403);
       }
 
@@ -151,6 +154,18 @@ export class ChatSessionService {
       await this.#repository.deleteSession(sessionId, entry.versionstamp);
       return null;
     }
+    const deletion = await this.#repository.getAccountDeletion(user.id);
+    if (deletion) {
+      const path = new URL(request.url).pathname;
+      const isDeletionRetry = deletion.sessionId === session.id &&
+        request.method === "DELETE" && path === "/api/chat/me";
+      if (!isDeletionRetry) {
+        if (deletion.sessionId !== session.id) {
+          await this.#repository.deleteSession(sessionId, entry.versionstamp);
+        }
+        return null;
+      }
+    }
     return { user, session, sessionVersionstamp: entry.versionstamp };
   }
 
@@ -203,6 +218,48 @@ export class ChatSessionService {
       changes,
       this.#now().toISOString(),
     );
+  }
+
+  async deleteAccount(
+    authenticated: AuthenticatedChatRequest,
+  ): Promise<"deleted" | "owned-rooms" | "conflict"> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (
+        (await this.#repository.listRoomIdsByOwner(authenticated.user.id))
+          .length > 0
+      ) return "owned-rooms";
+      const started = await this.#repository.beginAccountDeletion(
+        authenticated.user.id,
+        authenticated.session.id,
+        this.#now().toISOString(),
+      );
+      if (started === "owned-rooms") return "owned-rooms";
+      if (started === "not-found") return "deleted";
+      if (started === "conflict") continue;
+
+      await this.#repository.deleteAccountAssociatedData(
+        authenticated.user.id,
+        authenticated.session.id,
+        authenticated.user.email,
+      );
+      const [userEntry, deletionEntry] = await Promise.all([
+        this.#repository.getUserEntry(authenticated.user.id),
+        this.#repository.getAccountDeletionEntry(authenticated.user.id),
+      ]);
+      if (!userEntry.value || !userEntry.versionstamp) return "deleted";
+      if (!deletionEntry.value || !deletionEntry.versionstamp) {
+        return "conflict";
+      }
+      if (
+        await this.#repository.finishAccountDeletion(
+          userEntry.value,
+          userEntry.versionstamp,
+          deletionEntry.value,
+          deletionEntry.versionstamp,
+        )
+      ) return "deleted";
+    }
+    return "conflict";
   }
 
   async #getOrCreateUser(email: string): Promise<User> {
@@ -259,8 +316,48 @@ export function createSessionAuthHandler(
         return sessionJson({ user: currentUser(user), needsProfile: false });
       }
 
+      if (request.method === "DELETE") {
+        const authenticated = await requireChatMutation(request, service);
+        if (authenticated instanceof Response) return authenticated;
+        const body = await readProfileJson(request);
+        if (body instanceof Response) return body;
+        if (
+          !body || typeof body !== "object" || Array.isArray(body) ||
+          Object.keys(body).length !== 1 ||
+          (body as Record<string, unknown>).confirmation !== "アカウント削除"
+        ) {
+          return sessionJson(
+            { error: "Account deletion confirmation does not match" },
+            400,
+          );
+        }
+        try {
+          const result = await service.deleteAccount(authenticated);
+          if (result === "owned-rooms") {
+            return sessionJson(
+              { error: "Delete owned rooms before deleting the account" },
+              409,
+            );
+          }
+          if (result === "conflict") {
+            return sessionJson(
+              { error: "Could not delete account; retry the request" },
+              503,
+            );
+          }
+          const response = sessionJson({ ok: true });
+          appendClearedSessionCookies(response.headers);
+          return response;
+        } catch {
+          return sessionJson(
+            { error: "Account deletion is incomplete; retry the request" },
+            503,
+          );
+        }
+      }
+
       return sessionJson({ error: "Method not allowed" }, 405, {
-        Allow: "GET, PATCH",
+        Allow: "GET, PATCH, DELETE",
       });
     }
 

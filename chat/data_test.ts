@@ -45,6 +45,8 @@ Deno.test("chat keys use an isolated namespace and normalized email", () => {
     chatKeys.session("session-1"),
     chatKeys.room("room-1"),
     chatKeys.roomByOwner("user-1", "room-1"),
+    chatKeys.roomDeletion("room-1"),
+    chatKeys.accountDeletion("user-1"),
     chatKeys.member("room-1", "user-1"),
     chatKeys.request("room-1", "user-1"),
     chatKeys.message("room-1", "message-1"),

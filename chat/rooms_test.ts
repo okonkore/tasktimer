@@ -1,4 +1,13 @@
-import { ChatRepository } from "./data.ts";
+import {
+  type ChatEvent,
+  chatKeys,
+  ChatRepository,
+  type JoinRequest,
+  type Member,
+  type Message,
+  type Notification,
+  type ReadPosition,
+} from "./data.ts";
 import { ChatRoomService, createChatRoomHandler } from "./rooms.ts";
 import {
   ChatSessionService,
@@ -30,6 +39,7 @@ function cookieValue(cookies: string, name: string): string {
 
 async function withRoomService(
   run: (context: {
+    kv: Deno.Kv;
     repository: ChatRepository;
     sessions: ChatSessionService;
     handler: (request: Request) => Promise<Response>;
@@ -54,6 +64,7 @@ async function withRoomService(
   });
   try {
     await run({
+      kv,
       repository,
       sessions,
       handler: createChatRoomHandler(service),
@@ -192,5 +203,194 @@ Deno.test("room creation enforces the 20 owned-room limit", async () => {
       { name: "Overflow", description: "" },
     ));
     assert(overflow.status === 409, "21st owned room must be rejected");
+  });
+});
+
+Deno.test("room deletion requires the owner, CSRF, and an exact room name", async () => {
+  await withRoomService(async ({ handler, login }) => {
+    const owner = await login("owner@example.com");
+    const created = await handler(
+      mutation("/api/chat/rooms", owner.cookies, owner.csrf, {
+        name: "Planning room",
+        description: "",
+      }),
+    );
+    const { room } = await created.json();
+    const other = await login("other@example.com");
+
+    const noCsrf = await handler(request(`/api/chat/rooms/${room.id}`, {
+      method: "DELETE",
+      headers: {
+        cookie: owner.cookies,
+        origin: "https://chat.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ confirmationName: room.name }),
+    }));
+    assert(noCsrf.status === 403, "room deletion must require CSRF");
+
+    const forbidden = await handler(mutation(
+      `/api/chat/rooms/${room.id}`,
+      other.cookies,
+      other.csrf,
+      { confirmationName: room.name },
+      "DELETE",
+    ));
+    assert(forbidden.status === 403, "non-owner must not delete a room");
+
+    const mismatch = await handler(mutation(
+      `/api/chat/rooms/${room.id}`,
+      owner.cookies,
+      owner.csrf,
+      { confirmationName: " planning room " },
+      "DELETE",
+    ));
+    assert(mismatch.status === 400, "confirmation must match exactly");
+
+    const stillThere = await handler(request(`/api/chat/rooms/${room.id}`, {
+      headers: { cookie: owner.cookies },
+    }));
+    assert(stillThere.status === 200, "failed confirmation must keep the room");
+  });
+});
+
+Deno.test("room deletion removes associated data and resumes safely", async () => {
+  await withRoomService(async ({ kv, repository, handler, login }) => {
+    const owner = await login("owner@example.com");
+    const joined = await login("joined@example.com");
+    const created = await handler(
+      mutation("/api/chat/rooms", owner.cookies, owner.csrf, {
+        name: "Large room",
+        description: "",
+      }),
+    );
+    const { room } = await created.json();
+    const timestamp = "2026-07-19T12:00:00.000Z";
+    const member: Member = {
+      roomId: room.id,
+      userId: "user-2",
+      role: "writer",
+      visibleFrom: timestamp,
+      joinedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const joinRequest: JoinRequest = {
+      roomId: room.id,
+      userId: "user-2",
+      status: "approved",
+      requestedAt: timestamp,
+      reviewedAt: timestamp,
+      rejectedUntil: null,
+      emailNotifiedAt: timestamp,
+    };
+    const message: Message = {
+      id: "01J00000000000000000000000",
+      roomId: room.id,
+      authorId: "user-2",
+      body: "remove me",
+      createdAt: timestamp,
+      deletedAt: null,
+      deletedBy: null,
+    };
+    const position: ReadPosition = {
+      roomId: room.id,
+      userId: "user-2",
+      lastReadMessageId: message.id,
+      updatedAt: timestamp,
+    };
+    const notification: Notification = {
+      id: "notification-1",
+      userId: "user-1",
+      type: "join-request",
+      roomId: room.id,
+      actorId: "user-2",
+      createdAt: timestamp,
+      readAt: null,
+      dedupeKey: null,
+    };
+    await repository.setMember(member);
+    await repository.setJoinRequest(joinRequest);
+    await repository.setMessage(message);
+    await repository.setReadPosition(position);
+    await repository.setNotification(notification);
+    await kv.set(
+      chatKeys.event("00000000000000000001"),
+      {
+        id: "00000000000000000001",
+        type: "message-created",
+        audience: "room-members",
+        roomId: room.id,
+        actorId: "user-2",
+        targetUserId: null,
+        createdAt: timestamp,
+        payload: {},
+      } satisfies ChatEvent,
+    );
+
+    // Simulate a request that made the room inaccessible but failed before
+    // sweeping its large collections. A retry must resume from this marker.
+    const roomEntry = await repository.getRoomEntry(room.id);
+    assert(roomEntry.value && roomEntry.versionstamp, "room must exist");
+    assert(
+      await repository.beginRoomDeletion(
+        roomEntry.value,
+        roomEntry.versionstamp,
+        timestamp,
+      ),
+      "deletion marker should be established",
+    );
+
+    const resumed = await handler(mutation(
+      `/api/chat/rooms/${room.id}`,
+      owner.cookies,
+      owner.csrf,
+      { confirmationName: room.name },
+      "DELETE",
+    ));
+    assert(resumed.status === 200, "retry should finish partial deletion");
+    const repeated = await handler(mutation(
+      `/api/chat/rooms/${room.id}`,
+      owner.cookies,
+      owner.csrf,
+      { confirmationName: room.name },
+      "DELETE",
+    ));
+    assert(repeated.status === 200, "completed deletion should be idempotent");
+
+    assert(await repository.getRoom(room.id) === null, "room must be gone");
+    assert(
+      await repository.getMember(room.id, "user-2") === null,
+      "members must be removed",
+    );
+    assert(
+      await repository.getJoinRequest(room.id, "user-2") === null,
+      "join requests must be removed",
+    );
+    assert(
+      await repository.getMessage(room.id, message.id) === null,
+      "messages must be removed",
+    );
+    assert(
+      await repository.getReadPosition(room.id, "user-2") === null,
+      "read positions must be removed",
+    );
+    assert(
+      (await kv.get(chatKeys.roomByMember("user-2", room.id))).value === null,
+      "member index must be removed",
+    );
+    assert(
+      (await kv.get(chatKeys.notification("user-1", notification.id))).value ===
+        null,
+      "room notifications must be removed",
+    );
+    assert(
+      (await kv.get(chatKeys.event("00000000000000000001"))).value === null,
+      "room events must be removed",
+    );
+    const inaccessible = await handler(request(
+      `/api/chat/rooms/${room.id}`,
+      { headers: { cookie: joined.cookies } },
+    ));
+    assert(inaccessible.status === 404, "deleted room must be inaccessible");
   });
 });

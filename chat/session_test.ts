@@ -1,5 +1,17 @@
 import { createOtpAuthHandler, OtpAuthService, type OtpMail } from "./auth.ts";
-import { ChatRepository } from "./data.ts";
+import {
+  type ChatEvent,
+  chatKeys,
+  ChatRepository,
+  createSortableId,
+  type Member,
+  type Message,
+  type Notification,
+  type OtpChallenge,
+  type ReadPosition,
+  type Room,
+} from "./data.ts";
+import { ChatMessageService, createChatMessageHandler } from "./messages.ts";
 import {
   ChatSessionService,
   createSessionAuthHandler,
@@ -25,6 +37,7 @@ function assertEquals(actual: unknown, expected: unknown, message: string) {
 }
 
 interface SessionTestContext {
+  kv: Deno.Kv;
   repository: ChatRepository;
   service: ChatSessionService;
   handler: (request: Request) => Promise<Response>;
@@ -50,6 +63,7 @@ async function withSessions(
   });
   try {
     await run({
+      kv,
       repository,
       service,
       handler: createSessionAuthHandler(service),
@@ -451,6 +465,270 @@ Deno.test("login rotates an existing session to prevent fixation", async () => {
     assert(
       (await newSession.json()).user.id === "user-1",
       "repeat login should reuse the same user",
+    );
+  });
+});
+
+Deno.test("account deletion rejects users who still own rooms", async () => {
+  await withSessions(async ({ repository, service, handler }) => {
+    const login = await service.completeOtpAuthentication(
+      "owner@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const cookies = cookieHeader(login);
+    const csrf = cookieValue(cookies, csrfCookieName);
+    const timestamp = "2026-07-19T12:00:00.000Z";
+    const room: Room = {
+      id: "room-0000000000000001",
+      ownerId: "user-1",
+      name: "Owned room",
+      description: "",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const owner: Member = {
+      roomId: room.id,
+      userId: "user-1",
+      role: "owner",
+      visibleFrom: timestamp,
+      joinedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    assert(
+      await repository.createRoomWithOwner(room, owner) === "created",
+      "owned room should be created",
+    );
+
+    const noCsrf = await handler(request("/api/chat/me", {
+      method: "DELETE",
+      headers: {
+        cookie: cookies,
+        origin: "https://chat.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ confirmation: "アカウント削除" }),
+    }));
+    assert(noCsrf.status === 403, "account deletion must require CSRF");
+
+    const deleted = await handler(request("/api/chat/me", {
+      method: "DELETE",
+      headers: {
+        cookie: cookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrf,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ confirmation: "アカウント削除" }),
+    }));
+    assert(deleted.status === 409, "owned rooms must block account deletion");
+    assert(
+      await repository.getUser("user-1") !== null,
+      "blocked deletion must preserve the user",
+    );
+  });
+});
+
+Deno.test("account deletion clears PII and sessions while retaining anonymous posts", async () => {
+  await withSessions(async ({ kv, repository, service, handler }) => {
+    const firstLogin = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const firstCookies = cookieHeader(firstLogin);
+    const csrf = cookieValue(firstCookies, csrfCookieName);
+    const secondLogin = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const secondCookies = cookieHeader(secondLogin);
+    const ownerLogin = await service.completeOtpAuthentication(
+      "owner@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    const ownerCookies = cookieHeader(ownerLogin);
+    const timestamp = "2026-07-19T12:00:00.000Z";
+    const room: Room = {
+      id: "room-0000000000000001",
+      ownerId: "user-2",
+      name: "History",
+      description: "",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const owner: Member = {
+      roomId: room.id,
+      userId: "user-2",
+      role: "owner",
+      visibleFrom: timestamp,
+      joinedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const formerMember: Member = {
+      ...owner,
+      userId: "user-1",
+      role: "writer",
+    };
+    assert(
+      await repository.createRoomWithOwner(room, owner) === "created",
+      "history room should be created",
+    );
+    await repository.setMember(formerMember);
+    const message: Message = {
+      id: createSortableId(new Date(timestamp)),
+      roomId: room.id,
+      authorId: "user-1",
+      body: "Historical message",
+      createdAt: timestamp,
+      deletedAt: null,
+      deletedBy: null,
+    };
+    await repository.setMessage(message);
+    await repository.setReadPosition(
+      {
+        roomId: room.id,
+        userId: "user-1",
+        lastReadMessageId: message.id,
+        updatedAt: timestamp,
+      } satisfies ReadPosition,
+    );
+    await repository.setNotification(
+      {
+        id: "notification-1",
+        userId: "user-2",
+        type: "join-request",
+        roomId: room.id,
+        actorId: "user-1",
+        createdAt: timestamp,
+        readAt: null,
+        dedupeKey: null,
+      } satisfies Notification,
+    );
+    await kv.set(
+      chatKeys.event("00000000000000000001"),
+      {
+        id: "00000000000000000001",
+        type: "message-created",
+        audience: "room-members",
+        roomId: room.id,
+        actorId: "user-1",
+        targetUserId: null,
+        createdAt: timestamp,
+        payload: { body: message.body },
+      } satisfies ChatEvent,
+    );
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    await repository.setOtpChallenge(
+      {
+        email: "ada@example.com",
+        codeHash: "secret",
+        failedAttempts: 0,
+        createdAt: timestamp,
+        expiresAt,
+        lastSentAt: timestamp,
+      } satisfies OtpChallenge,
+    );
+
+    const authenticated = await service.authenticate(request("/api/chat/me", {
+      method: "DELETE",
+      headers: { cookie: firstCookies },
+    }));
+    assert(
+      authenticated && !(authenticated instanceof Response),
+      "initiating session must authenticate",
+    );
+    assert(
+      await repository.beginAccountDeletion(
+        "user-1",
+        authenticated.session.id,
+        timestamp,
+      ) === "started",
+      "a partial deletion marker should be resumable",
+    );
+
+    const wrongConfirmation = await handler(request("/api/chat/me", {
+      method: "DELETE",
+      headers: {
+        cookie: firstCookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrf,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ confirmation: "削除" }),
+    }));
+    assert(
+      wrongConfirmation.status === 400,
+      "account confirmation must match exactly",
+    );
+
+    const deleted = await handler(request("/api/chat/me", {
+      method: "DELETE",
+      headers: {
+        cookie: firstCookies,
+        origin: "https://chat.example",
+        [csrfHeaderName]: csrf,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ confirmation: "アカウント削除" }),
+    }));
+    assert(deleted.status === 200, "account deletion should succeed");
+    assert(
+      getSetCookies(deleted).every((cookie) => cookie.includes("Max-Age=0")),
+      "account deletion must clear browser cookies",
+    );
+    assert(await repository.getUser("user-1") === null, "user PII must go");
+    assert(
+      await repository.getUserByEmail("ada@example.com") === null,
+      "email index must go",
+    );
+    assert(
+      await repository.getOtpChallenge("ada@example.com") === null,
+      "OTP must go",
+    );
+    assert(
+      await repository.getMessage(room.id, message.id) !== null,
+      "historical posts must remain",
+    );
+    const invalidated = await handler(request("/api/chat/me", {
+      headers: { cookie: secondCookies },
+    }));
+    assert(invalidated.status === 401, "all sessions must be invalidated");
+
+    const messageHandler = createChatMessageHandler(
+      new ChatMessageService({ repository, sessions: service }),
+    );
+    const history = await messageHandler(request(
+      `/api/chat/rooms/${room.id}/messages`,
+      { headers: { cookie: ownerCookies } },
+    ));
+    const historyBody = await history.json();
+    assert(
+      historyBody.messages[0].authorDisplayName === "退会したユーザー",
+      "retained posts must be anonymized",
+    );
+    assert(
+      (await kv.get(chatKeys.notification("user-2", "notification-1")))
+        .value ===
+        null,
+      "notifications containing the former actor must go",
+    );
+    assert(
+      (await kv.get(chatKeys.event("00000000000000000001"))).value === null,
+      "events containing the former actor must go",
+    );
+    for await (const entry of kv.list({ prefix: ["chat"] })) {
+      assert(
+        !JSON.stringify([entry.key, entry.value]).includes("ada@example.com"),
+        "no deleted email address may remain in chat KV",
+      );
+    }
+
+    const relogin = await service.completeOtpAuthentication(
+      "ada@example.com",
+      request("/api/chat/auth/verify-otp", { method: "POST" }),
+    );
+    assert(
+      (await relogin.json()).user.id !== "user-1",
+      "relogin should create a new user",
     );
   });
 });

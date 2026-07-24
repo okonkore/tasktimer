@@ -45,6 +45,19 @@ export interface Room {
   updatedAt: IsoDateTime;
 }
 
+export interface RoomDeletion {
+  roomId: string;
+  ownerId: string;
+  startedAt: IsoDateTime;
+  completedAt: IsoDateTime | null;
+}
+
+export interface AccountDeletion {
+  userId: string;
+  sessionId: string;
+  startedAt: IsoDateTime;
+}
+
 interface RoomOwnerCount {
   count: number;
 }
@@ -171,6 +184,16 @@ export const chatKeys = Object.freeze({
     "roomOwnerCounts",
     ownerId,
   ],
+  roomDeletion: (roomId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "roomDeletions",
+    roomId,
+  ],
+  accountDeletion: (userId: string): Deno.KvKey => [
+    ...chatPrefix,
+    "accountDeletions",
+    userId,
+  ],
   member: (roomId: string, userId: string): Deno.KvKey => [
     ...chatPrefix,
     "members",
@@ -293,6 +316,10 @@ export class ChatRepository {
 
   async getUser(userId: string): Promise<User | null> {
     return (await this.kv.get<User>(chatKeys.user(userId))).value;
+  }
+
+  async getUserEntry(userId: string): Promise<Deno.KvEntryMaybe<User>> {
+    return await this.kv.get<User>(chatKeys.user(userId));
   }
 
   async updateUserDisplayName(
@@ -433,6 +460,7 @@ export class ChatRepository {
     const ownerMemberKey = chatKeys.member(room.id, room.ownerId);
     const memberIndexKey = chatKeys.roomByMember(room.ownerId, room.id);
     const countKey = chatKeys.roomOwnerCount(room.ownerId);
+    const accountDeletionKey = chatKeys.accountDeletion(room.ownerId);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const countEntry = await this.kv.get<RoomOwnerCount>(countKey);
@@ -446,6 +474,7 @@ export class ChatRepository {
           { key: ownerMemberKey, versionstamp: null },
           { key: memberIndexKey, versionstamp: null },
           { key: countKey, versionstamp: countEntry.versionstamp },
+          { key: accountDeletionKey, versionstamp: null },
         )
         .set(roomKey, room)
         .set(ownerIndexKey, room.id)
@@ -504,6 +533,256 @@ export class ChatRepository {
 
   async getRoomEntry(roomId: string): Promise<Deno.KvEntryMaybe<Room>> {
     return await this.kv.get<Room>(chatKeys.room(roomId));
+  }
+
+  async getRoomDeletion(roomId: string): Promise<RoomDeletion | null> {
+    return (await this.kv.get<RoomDeletion>(chatKeys.roomDeletion(roomId)))
+      .value;
+  }
+
+  async beginRoomDeletion(
+    room: Room,
+    expectedRoomVersionstamp: string,
+    startedAt: IsoDateTime,
+  ): Promise<boolean> {
+    const countKey = chatKeys.roomOwnerCount(room.ownerId);
+    const countEntry = await this.kv.get<RoomOwnerCount>(countKey);
+    const count = countEntry.value?.count ?? 0;
+    if (count < 1) return false;
+    const deletion: RoomDeletion = {
+      roomId: room.id,
+      ownerId: room.ownerId,
+      startedAt,
+      completedAt: null,
+    };
+    let operation = this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.room(room.id),
+          versionstamp: expectedRoomVersionstamp,
+        },
+        {
+          key: chatKeys.roomDeletion(room.id),
+          versionstamp: null,
+        },
+        { key: countKey, versionstamp: countEntry.versionstamp },
+      )
+      .set(chatKeys.roomDeletion(room.id), deletion)
+      .delete(chatKeys.room(room.id))
+      .delete(chatKeys.roomByOwner(room.ownerId, room.id))
+      .delete(chatKeys.member(room.id, room.ownerId))
+      .delete(chatKeys.roomByMember(room.ownerId, room.id));
+    operation = count === 1
+      ? operation.delete(countKey)
+      : operation.set(countKey, { count: count - 1 } satisfies RoomOwnerCount);
+    return (await operation.commit()).ok;
+  }
+
+  async finishRoomDeletion(
+    deletion: RoomDeletion,
+    completedAt: IsoDateTime,
+  ): Promise<void> {
+    const key = chatKeys.roomDeletion(deletion.roomId);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const entry = await this.kv.get<RoomDeletion>(key);
+      if (!entry.value || !entry.versionstamp) return;
+      if (entry.value.completedAt) return;
+      const result = await this.kv.atomic()
+        .check({ key, versionstamp: entry.versionstamp })
+        .set(
+          key,
+          {
+            ...entry.value,
+            completedAt,
+          } satisfies RoomDeletion,
+        )
+        .commit();
+      if (result.ok) return;
+    }
+    throw new Error("Could not mark room deletion complete");
+  }
+
+  async deleteRoomAssociatedData(roomId: string): Promise<void> {
+    const members = this.kv.list<Member>({
+      prefix: ["chat", "members", roomId],
+    });
+    for await (const entry of members) {
+      await this.kv.delete(
+        chatKeys.roomByMember(entry.value.userId, roomId),
+      );
+      await this.kv.delete(entry.key);
+    }
+    await this.#deletePrefix(["chat", "requests", roomId]);
+    await this.#deletePrefix(["chat", "messages", roomId]);
+    await this.#deletePrefix(["chat", "readPositions", roomId]);
+
+    const notifications = this.kv.list<Notification>({
+      prefix: ["chat", "notifications"],
+    });
+    for await (const entry of notifications) {
+      if (entry.value.roomId === roomId) await this.kv.delete(entry.key);
+    }
+    const events = this.kv.list<ChatEvent>({ prefix: ["chat", "events"] });
+    for await (const entry of events) {
+      if (entry.value.roomId === roomId) await this.kv.delete(entry.key);
+    }
+  }
+
+  async getAccountDeletion(userId: string): Promise<AccountDeletion | null> {
+    return (
+      await this.kv.get<AccountDeletion>(chatKeys.accountDeletion(userId))
+    ).value;
+  }
+
+  async getAccountDeletionEntry(
+    userId: string,
+  ): Promise<Deno.KvEntryMaybe<AccountDeletion>> {
+    return await this.kv.get<AccountDeletion>(
+      chatKeys.accountDeletion(userId),
+    );
+  }
+
+  async beginAccountDeletion(
+    userId: string,
+    sessionId: string,
+    startedAt: IsoDateTime,
+  ): Promise<"started" | "owned-rooms" | "not-found" | "conflict"> {
+    const [userEntry, countEntry, deletionEntry] = await Promise.all([
+      this.kv.get<User>(chatKeys.user(userId)),
+      this.kv.get<RoomOwnerCount>(chatKeys.roomOwnerCount(userId)),
+      this.kv.get<AccountDeletion>(chatKeys.accountDeletion(userId)),
+    ]);
+    if (!userEntry.value || !userEntry.versionstamp) return "not-found";
+    if ((countEntry.value?.count ?? 0) > 0) return "owned-rooms";
+    if (deletionEntry.value) {
+      return deletionEntry.value.sessionId === sessionId
+        ? "started"
+        : "conflict";
+    }
+    const result = await this.kv.atomic()
+      .check(
+        { key: userEntry.key, versionstamp: userEntry.versionstamp },
+        { key: countEntry.key, versionstamp: countEntry.versionstamp },
+        { key: deletionEntry.key, versionstamp: null },
+      )
+      .set(
+        deletionEntry.key,
+        {
+          userId,
+          sessionId,
+          startedAt,
+        } satisfies AccountDeletion,
+      )
+      .commit();
+    return result.ok ? "started" : "conflict";
+  }
+
+  async deleteAccountAssociatedData(
+    userId: string,
+    currentSessionId: string,
+    email: string,
+  ): Promise<void> {
+    const memberships = this.kv.list<string>({
+      prefix: ["chat", "roomsByMember", userId],
+    });
+    for await (const entry of memberships) {
+      const roomId = entry.value;
+      await this.kv.delete(chatKeys.member(roomId, userId));
+      await this.kv.delete(chatKeys.request(roomId, userId));
+      await this.kv.delete(chatKeys.readPosition(roomId, userId));
+      await this.kv.delete(entry.key);
+    }
+    const requests = this.kv.list<JoinRequest>({
+      prefix: ["chat", "requests"],
+    });
+    for await (const entry of requests) {
+      if (entry.value.userId === userId) await this.kv.delete(entry.key);
+    }
+
+    const sessions = this.kv.list<Session>({ prefix: ["chat", "sessions"] });
+    for await (const entry of sessions) {
+      if (
+        entry.value.userId === userId &&
+        entry.value.id !== currentSessionId
+      ) await this.kv.delete(entry.key);
+    }
+
+    const notifications = this.kv.list<Notification>({
+      prefix: ["chat", "notifications"],
+    });
+    for await (const entry of notifications) {
+      if (
+        entry.value.userId === userId || entry.value.actorId === userId
+      ) await this.kv.delete(entry.key);
+    }
+    const events = this.kv.list<ChatEvent>({ prefix: ["chat", "events"] });
+    for await (const entry of events) {
+      if (
+        entry.value.actorId === userId ||
+        entry.value.targetUserId === userId
+      ) await this.kv.delete(entry.key);
+    }
+
+    const positions = this.kv.list<ReadPosition>({
+      prefix: ["chat", "readPositions"],
+    });
+    for await (const entry of positions) {
+      if (entry.value.userId === userId) await this.kv.delete(entry.key);
+    }
+    const roomDeletions = this.kv.list<RoomDeletion>({
+      prefix: ["chat", "roomDeletions"],
+    });
+    for await (const entry of roomDeletions) {
+      if (entry.value.ownerId === userId) {
+        await this.deleteRoomAssociatedData(entry.value.roomId);
+        await this.kv.delete(entry.key);
+      }
+    }
+    const rateLimits = this.kv.list<RateLimitWindow>({
+      prefix: ["chat", "rateLimits"],
+    });
+    for await (const entry of rateLimits) {
+      if (
+        entry.key.some((part) =>
+          part === userId || part === normalizeEmail(email)
+        )
+      ) await this.kv.delete(entry.key);
+    }
+  }
+
+  async finishAccountDeletion(
+    user: User,
+    expectedUserVersionstamp: string,
+    deletion: AccountDeletion,
+    expectedDeletionVersionstamp: string,
+  ): Promise<boolean> {
+    const emailEntry = await this.kv.get<string>(
+      chatKeys.userByEmail(user.email),
+    );
+    const countEntry = await this.kv.get<RoomOwnerCount>(
+      chatKeys.roomOwnerCount(user.id),
+    );
+    if ((countEntry.value?.count ?? 0) > 0) return false;
+    const operation = this.kv.atomic()
+      .check(
+        {
+          key: chatKeys.user(user.id),
+          versionstamp: expectedUserVersionstamp,
+        },
+        {
+          key: chatKeys.accountDeletion(user.id),
+          versionstamp: expectedDeletionVersionstamp,
+        },
+        { key: countEntry.key, versionstamp: countEntry.versionstamp },
+        { key: emailEntry.key, versionstamp: emailEntry.versionstamp },
+      )
+      .delete(chatKeys.user(user.id))
+      .delete(chatKeys.userByEmail(user.email))
+      .delete(chatKeys.otp(user.email))
+      .delete(chatKeys.session(deletion.sessionId))
+      .delete(chatKeys.roomOwnerCount(user.id))
+      .delete(chatKeys.accountDeletion(user.id));
+    return (await operation.commit()).ok;
   }
 
   async setMember(member: Member): Promise<void> {
@@ -711,6 +990,10 @@ export class ChatRepository {
         },
         { key: memberKey, versionstamp: null },
         { key: memberIndexKey, versionstamp: null },
+        {
+          key: chatKeys.accountDeletion(member.userId),
+          versionstamp: null,
+        },
       )
       .set(chatKeys.request(request.roomId, request.userId), request)
       .set(memberKey, member)
@@ -979,5 +1262,10 @@ export class ChatRepository {
         .check({ key: chatKeys.event(persisted.id), versionstamp: null })
         .set(chatKeys.event(persisted.id), persisted),
     };
+  }
+
+  async #deletePrefix(prefix: Deno.KvKey): Promise<void> {
+    const entries = this.kv.list({ prefix });
+    for await (const entry of entries) await this.kv.delete(entry.key);
   }
 }

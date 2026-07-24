@@ -412,7 +412,19 @@ async function renderProfile() {
     }</button>
       </form>
       ${
-      firstSetup ? "" : '<a class="back-link" href="/chat/">チャットへ戻る</a>'
+      firstSetup ? "" : `
+          <section class="danger-zone" aria-labelledby="accountDeleteTitle">
+            <h2 id="accountDeleteTitle">アカウント削除</h2>
+            <p>メールアドレスなどの個人情報を削除します。過去の投稿は「退会したユーザー」として残ります。</p>
+            <p>所有しているルームがある場合は、先にルームを削除してください。</p>
+            <form class="stack" data-account-delete novalidate>
+              <label for="accountDeleteConfirmation">確認のため「アカウント削除」と入力</label>
+              <input id="accountDeleteConfirmation" name="confirmation" type="text" autocomplete="off" required />
+              <p class="form-error" data-delete-error role="alert" hidden></p>
+              <button class="danger" type="submit">アカウントを削除</button>
+            </form>
+          </section>
+          <a class="back-link" href="/chat/">チャットへ戻る</a>`
     }`);
     const form = app.querySelector("[data-profile-form]");
     const input = form.elements.displayName;
@@ -474,6 +486,40 @@ async function renderProfile() {
         button.textContent = firstSetup
           ? "表示名を保存して続ける"
           : "表示名を保存";
+      }
+    });
+    const deleteForm = app.querySelector("[data-account-delete]");
+    deleteForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const deleteError = deleteForm.querySelector("[data-delete-error]");
+      const confirmation = deleteForm.elements.confirmation.value;
+      if (confirmation !== "アカウント削除") {
+        deleteError.textContent = "確認文を正確に入力してください。";
+        deleteError.hidden = false;
+        return;
+      }
+      const deleteButton = deleteForm.querySelector("button");
+      deleteButton.disabled = true;
+      deleteButton.textContent = "削除中…";
+      try {
+        const deleted = await requestJson(
+          "/api/chat/me",
+          "DELETE",
+          { confirmation },
+          true,
+        );
+        if (!deleted.response.ok) {
+          throw new Error(
+            apiError(deleted.body, "アカウントを削除できませんでした。"),
+          );
+        }
+        stopRealtimeEvents();
+        navigate("/chat/login");
+      } catch (requestError) {
+        deleteError.textContent = errorText(requestError);
+        deleteError.hidden = false;
+        deleteButton.disabled = false;
+        deleteButton.textContent = "アカウントを削除";
       }
     });
   } catch (requestError) {
@@ -1554,6 +1600,17 @@ async function renderRoomSettings(roomId) {
         <p class="form-error" data-error role="alert" hidden></p><p class="form-success" data-success role="status" hidden></p>
         <button type="submit">変更を保存</button>
       </form>
+      <section class="danger-zone" aria-labelledby="roomDeleteTitle">
+        <h2 id="roomDeleteTitle">ルーム削除</h2>
+        <p>メッセージ、メンバー、参加申請、既読状態をすべて削除します。この操作は元に戻せません。</p>
+        <form class="stack" data-room-delete novalidate>
+          <label for="roomDeleteConfirmation">確認のため現在のルーム名を入力</label>
+          <input id="roomDeleteConfirmation" name="confirmationName" type="text" maxlength="50" autocomplete="off" required />
+          <p class="field-hint" data-room-name-hint></p>
+          <p class="form-error" data-delete-error role="alert" hidden></p>
+          <button class="danger" type="submit">ルームを削除</button>
+        </form>
+      </section>
       <a class="back-link" href="/chat/rooms/${
       encodeURIComponent(roomId)
     }">ルームへ戻る</a>`);
@@ -1563,6 +1620,9 @@ async function renderRoomSettings(roomId) {
     const error = form.querySelector("[data-error]");
     const success = form.querySelector("[data-success]");
     const button = form.querySelector("button");
+    const deleteForm = app.querySelector("[data-room-delete]");
+    deleteForm.querySelector("[data-room-name-hint]").textContent =
+      `現在のルーム名: ${result.room.name}`;
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const name = form.elements.roomName.value.trim();
@@ -1597,6 +1657,38 @@ async function renderRoomSettings(roomId) {
       } finally {
         button.disabled = false;
         button.textContent = "変更を保存";
+      }
+    });
+    deleteForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const deleteError = deleteForm.querySelector("[data-delete-error]");
+      const confirmationName = deleteForm.elements.confirmationName.value;
+      if (confirmationName !== result.room.name) {
+        deleteError.textContent = "現在のルーム名と一致しません。";
+        deleteError.hidden = false;
+        return;
+      }
+      const deleteButton = deleteForm.querySelector("button");
+      deleteButton.disabled = true;
+      deleteButton.textContent = "削除中…";
+      try {
+        const deleted = await requestJson(
+          `/api/chat/rooms/${encodeURIComponent(roomId)}`,
+          "DELETE",
+          { confirmationName },
+          true,
+        );
+        if (!deleted.response.ok) {
+          throw new Error(
+            apiError(deleted.body, "ルームを削除できませんでした。"),
+          );
+        }
+        navigate("/chat/");
+      } catch (requestError) {
+        deleteError.textContent = errorText(requestError);
+        deleteError.hidden = false;
+        deleteButton.disabled = false;
+        deleteButton.textContent = "ルームを削除";
       }
     });
   } catch (requestError) {
