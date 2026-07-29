@@ -58,21 +58,11 @@ export async function checkHotelAvailability(
   let error: string | null = null;
 
   try {
-    const response = await (dependencies.fetcher ?? fetch)(
-      HOTEL_AVAILABILITY_URL,
-      {
-        headers: {
-          "accept": "text/html,application/xhtml+xml",
-          "user-agent":
-            "ParadiseTimer-SaraGrandeMonitor/1.0 (+availability history)",
-        },
-        signal: AbortSignal.timeout(20_000),
-      },
+    const html = await fetchHotelHtml(
+      dependencies.fetcher ?? fetch,
+      dependencies.fetcher ? undefined : fetchHotelHtmlOverTls,
     );
-    if (!response.ok) {
-      throw new Error(`対象ページが HTTP ${response.status} を返しました`);
-    }
-    partial = parseHotelAvailability(await response.text());
+    partial = parseHotelAvailability(html);
   } catch (cause) {
     error = cause instanceof Error ? cause.message : "取得に失敗しました";
   }
@@ -93,6 +83,91 @@ export async function checkHotelAvailability(
     .set(latestKey, record)
     .commit();
   return record;
+}
+
+export async function fetchHotelHtml(
+  fetcher: typeof fetch,
+  fallback?: () => Promise<string>,
+): Promise<string> {
+  try {
+    const response = await fetcher(HOTEL_AVAILABILITY_URL, {
+      headers: {
+        "accept": "text/html,application/xhtml+xml",
+        "user-agent":
+          "ParadiseTimer-SaraGrandeMonitor/1.0 (+availability history)",
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) {
+      throw new Error(`対象ページが HTTP ${response.status} を返しました`);
+    }
+    return await response.text();
+  } catch (primaryError) {
+    if (!fallback) throw primaryError;
+    return await fallback();
+  }
+}
+
+export async function fetchHotelHtmlOverTls(): Promise<string> {
+  const connection = await Deno.connectTls({
+    hostname: "www.hotenavi.com",
+    port: 443,
+  });
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    const request = new TextEncoder().encode(
+      "GET /sara-gra/empty HTTP/1.0\r\n" +
+        "Host: www.hotenavi.com\r\n" +
+        "Accept: text/html,application/xhtml+xml\r\n" +
+        "User-Agent: ParadiseTimer-SaraGrandeMonitor/1.0 (+availability history)\r\n" +
+        "Connection: close\r\n\r\n",
+    );
+    await connection.write(request);
+
+    while (totalBytes <= 512 * 1024) {
+      const buffer = new Uint8Array(16 * 1024);
+      try {
+        const bytesRead = await connection.read(buffer);
+        if (bytesRead === null) break;
+        chunks.push(buffer.slice(0, bytesRead));
+        totalBytes += bytesRead;
+      } catch (cause) {
+        // This server closes TLS without close_notify after sending the body.
+        // Deno fetch rejects that response, but the complete HTML is already read.
+        if (!chunks.length) throw cause;
+        break;
+      }
+    }
+  } finally {
+    connection.close();
+  }
+
+  if (totalBytes > 512 * 1024) {
+    throw new Error("対象ページの応答が大きすぎます");
+  }
+  const responseBytes = concatenate(chunks, totalBytes);
+  const headerEnd = findSequence(
+    responseBytes,
+    new Uint8Array([13, 10, 13, 10]),
+  );
+  if (headerEnd < 0) throw new Error("対象ページのHTTP応答が不正です");
+
+  const headers = new TextDecoder("latin1").decode(
+    responseBytes.slice(0, headerEnd),
+  );
+  const status = headers.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i);
+  if (!status) throw new Error("対象ページのHTTP状態を読み取れませんでした");
+  if (Number(status[1]) < 200 || Number(status[1]) >= 300) {
+    throw new Error(`対象ページが HTTP ${status[1]} を返しました`);
+  }
+
+  const html = new TextDecoder().decode(responseBytes.slice(headerEnd + 4));
+  if (!html.includes("epEmptyRoomTxt")) {
+    throw new Error("対象ページの応答が途中で終了しました");
+  }
+  return html;
 }
 
 export async function handleHotelMonitorRequest(
@@ -197,6 +272,27 @@ function decodeHtml(value: string): string {
     .replaceAll("&gt;", ">")
     .replaceAll("&lt;", "<")
     .replaceAll("&amp;", "&");
+}
+
+function concatenate(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function findSequence(haystack: Uint8Array, needle: Uint8Array): number {
+  outer:
+  for (let index = 0; index <= haystack.length - needle.length; index++) {
+    for (let offset = 0; offset < needle.length; offset++) {
+      if (haystack[index + offset] !== needle[offset]) continue outer;
+    }
+    return index;
+  }
+  return -1;
 }
 
 function json(

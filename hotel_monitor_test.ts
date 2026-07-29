@@ -1,5 +1,6 @@
 import {
   checkHotelAvailability,
+  fetchHotelHtml,
   handleHotelMonitorRequest,
   parseHotelAvailability,
 } from "./hotel_monitor.ts";
@@ -102,6 +103,27 @@ Deno.test("hotel checks preserve failures in history", async () => {
   } finally {
     kv.close();
   }
+});
+
+Deno.test("hotel fetch falls back when a legacy TLS body cannot be read", async () => {
+  const brokenFetcher = (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("error reading a body from connection"));
+          },
+        }),
+        { status: 200 },
+      ),
+    )) as typeof fetch;
+  let fallbackCalls = 0;
+  const html = await fetchHotelHtml(brokenFetcher, () => {
+    fallbackCalls += 1;
+    return Promise.resolve(sampleHtml);
+  });
+  assert(html === sampleHtml, "the TLS fallback should provide the HTML");
+  assert(fallbackCalls === 1, "the fallback should run exactly once");
 });
 
 Deno.test("manual checks reuse a result collected less than one minute ago", async () => {
