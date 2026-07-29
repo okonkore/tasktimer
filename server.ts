@@ -251,8 +251,8 @@ export async function handleRequest(
 
 if (import.meta.main) {
   Deno.cron(
-    "sara-grande-availability-every-10-minutes",
-    "*/10 * * * *",
+    "sara-grande-availability-every-5-minutes",
+    "*/5 * * * *",
     async () => {
       const record = await checkHotelAvailability({
         kv: await resolveKv(),
