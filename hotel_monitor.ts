@@ -115,6 +115,8 @@ export async function fetchHotelHtmlOverTls(): Promise<string> {
   });
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
+  let responseTail = "";
+  let documentComplete = false;
 
   try {
     const request = new TextEncoder().encode(
@@ -131,8 +133,16 @@ export async function fetchHotelHtmlOverTls(): Promise<string> {
       try {
         const bytesRead = await connection.read(buffer);
         if (bytesRead === null) break;
-        chunks.push(buffer.slice(0, bytesRead));
+        const chunk = buffer.slice(0, bytesRead);
+        chunks.push(chunk);
         totalBytes += bytesRead;
+        responseTail = (
+          responseTail + new TextDecoder().decode(chunk)
+        ).slice(-128);
+        if (responseTail.toLowerCase().includes("</html>")) {
+          documentComplete = true;
+          break;
+        }
       } catch (cause) {
         // This server closes TLS without close_notify after sending the body.
         // Deno fetch rejects that response, but the complete HTML is already read.
@@ -146,6 +156,9 @@ export async function fetchHotelHtmlOverTls(): Promise<string> {
 
   if (totalBytes > 512 * 1024) {
     throw new Error("対象ページの応答が大きすぎます");
+  }
+  if (!documentComplete) {
+    throw new Error("対象ページの応答が途中で終了しました");
   }
   const responseBytes = concatenate(chunks, totalBytes);
   const headerEnd = findSequence(
@@ -164,7 +177,9 @@ export async function fetchHotelHtmlOverTls(): Promise<string> {
   }
 
   const html = new TextDecoder().decode(responseBytes.slice(headerEnd + 4));
-  if (!html.includes("epEmptyRoomTxt")) {
+  if (
+    !html.includes("epEmptyRoomTxt") || !html.toLowerCase().includes("</html>")
+  ) {
     throw new Error("対象ページの応答が途中で終了しました");
   }
   return html;
