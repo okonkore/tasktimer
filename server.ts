@@ -25,8 +25,12 @@ import {
   ChatNotificationService,
   createChatNotificationHandler,
 } from "./chat/notifications.ts";
+import {
+  checkHotelAvailability,
+  handleHotelMonitorRequest,
+} from "./hotel_monitor.ts";
 
-const kv = await Deno.openKv();
+let productionKvPromise: Promise<Deno.Kv> | null = null;
 
 const stateKey: Deno.KvKey = ["tasktimer", "state"];
 const documentPrefix: Deno.KvKey = ["tasktimer", "documents"];
@@ -49,6 +53,14 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
   }],
   ["/styles.css", {
     path: "styles.css",
+    contentType: "text/css; charset=utf-8",
+  }],
+  ["/hotel/client.js", {
+    path: "hotel/client.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/hotel/styles.css", {
+    path: "hotel/styles.css",
     contentType: "text/css; charset=utf-8",
   }],
   ["/chat/client.js", {
@@ -85,6 +97,8 @@ export interface RequestDependencies {
   chatMessageHandler?: (request: Request) => Promise<Response>;
   chatEventHandler?: (request: Request) => Promise<Response>;
   chatNotificationHandler?: (request: Request) => Promise<Response>;
+  hotelFetcher?: typeof fetch;
+  now?: () => Date;
 }
 
 export async function handleRequest(
@@ -92,7 +106,17 @@ export async function handleRequest(
   dependencies: RequestDependencies = {},
 ): Promise<Response> {
   const url = new URL(request.url);
-  const requestKv = dependencies.kv ?? kv;
+
+  if (
+    url.pathname === "/api/hotel/availability" ||
+    url.pathname === "/api/hotel/availability/check"
+  ) {
+    return await handleHotelMonitorRequest(request, {
+      kv: await resolveKv(dependencies.kv),
+      fetcher: dependencies.hotelFetcher,
+      now: dependencies.now,
+    });
+  }
 
   if (url.pathname === "/api/chat/health") {
     if (request.method !== "GET") {
@@ -169,18 +193,25 @@ export async function handleRequest(
   }
 
   if (url.pathname === "/api/documents") {
-    return handleDocumentCollectionRequest(request, requestKv);
+    return handleDocumentCollectionRequest(
+      request,
+      await resolveKv(dependencies.kv),
+    );
   }
 
   const documentMatch = url.pathname.match(
     /^\/api\/documents\/([a-zA-Z0-9_-]{1,100})$/,
   );
   if (documentMatch) {
-    return handleDocumentRequest(request, documentMatch[1], requestKv);
+    return handleDocumentRequest(
+      request,
+      documentMatch[1],
+      await resolveKv(dependencies.kv),
+    );
   }
 
   if (url.pathname === "/api/state") {
-    return handleStateRequest(request, requestKv);
+    return handleStateRequest(request, await resolveKv(dependencies.kv));
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -192,6 +223,8 @@ export async function handleRequest(
   const file = staticFiles.get(url.pathname) ||
     (url.pathname === "/chat" || url.pathname.startsWith("/chat/")
       ? { path: "chat/index.html", contentType: "text/html; charset=utf-8" }
+      : url.pathname === "/hotel" || url.pathname === "/hotel/"
+      ? { path: "hotel/index.html", contentType: "text/html; charset=utf-8" }
       : undefined);
   if (!file) return new Response("Not found", { status: 404 });
 
@@ -217,6 +250,24 @@ export async function handleRequest(
 }
 
 if (import.meta.main) {
+  Deno.cron(
+    "sara-grande-availability-every-10-minutes",
+    "*/10 * * * *",
+    async () => {
+      const record = await checkHotelAvailability({
+        kv: await resolveKv(),
+      });
+      if (record.ok) {
+        console.log(
+          `SARA GRANDE: ${
+            record.available?.label ?? "不明"
+          } (${record.checkedAt})`,
+        );
+      } else {
+        console.error(`SARA GRANDE monitor failed: ${record.error}`);
+      }
+    },
+  );
   Deno.serve((request, info) =>
     handleRequest(request, { clientIp: info.remoteAddr.hostname })
   );
@@ -241,12 +292,18 @@ let productionChatNotificationHandler:
   | ((request: Request) => Promise<Response>)
   | null = null;
 
+async function resolveKv(injected?: Deno.Kv): Promise<Deno.Kv> {
+  if (injected) return injected;
+  productionKvPromise ??= Deno.openKv();
+  return await productionKvPromise;
+}
+
 async function handleProductionChatAuth(
   request: Request,
   clientIp?: string,
 ): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatAuthHandler) throw new Error("Auth handler unavailable");
     if (!clientIp) return await productionChatAuthHandler(request);
     const headers = new Headers(request.headers);
@@ -261,7 +318,7 @@ async function handleProductionChatAuth(
 
 async function handleProductionChatRooms(request: Request): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatRoomHandler) throw new Error("Room handler unavailable");
     return await productionChatRoomHandler(request);
   } catch {
@@ -275,7 +332,7 @@ async function handleProductionChatJoinRequests(
   request: Request,
 ): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatJoinRequestHandler) {
       throw new Error("Join request handler unavailable");
     }
@@ -291,7 +348,7 @@ async function handleProductionChatMessages(
   request: Request,
 ): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatMessageHandler) {
       throw new Error("Message handler unavailable");
     }
@@ -305,7 +362,7 @@ async function handleProductionChatMessages(
 
 async function handleProductionChatEvents(request: Request): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatEventHandler) {
       throw new Error("Event handler unavailable");
     }
@@ -321,7 +378,7 @@ async function handleProductionChatNotifications(
   request: Request,
 ): Promise<Response> {
   try {
-    initializeProductionChatHandlers();
+    await initializeProductionChatHandlers();
     if (!productionChatNotificationHandler) {
       throw new Error("Notification handler unavailable");
     }
@@ -333,7 +390,7 @@ async function handleProductionChatNotifications(
   }
 }
 
-function initializeProductionChatHandlers(): void {
+async function initializeProductionChatHandlers(): Promise<void> {
   if (
     productionChatAuthHandler && productionChatRoomHandler &&
     productionChatJoinRequestHandler && productionChatMessageHandler &&
@@ -343,7 +400,7 @@ function initializeProductionChatHandlers(): void {
   const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   const emailFrom = Deno.env.get("EMAIL_FROM") ?? "";
   const chatPublicOrigin = Deno.env.get("CHAT_PUBLIC_ORIGIN");
-  const repository = new ChatRepository(kv);
+  const repository = new ChatRepository(await resolveKv());
   const sessionService = new ChatSessionService({ repository });
   const passwordHandler = createPasswordAuthHandler(
     new PasswordAuthService({ repository }),

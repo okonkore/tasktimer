@@ -6,6 +6,11 @@
 と `chat` に分けています。共有先のPerfpadでもこの2つの接頭辞を
 使わないでください。
 
+`/hotel/` では SARA GRANDE 五反田の空室状況と履歴を表示します。 `Deno.cron`
+が10分ごとに公式空室ページを確認し、成功・失敗のどちらも `hotel-monitor`
+接頭辞のKVへ記録します。画面の「今すぐ確認」も利用できますが、
+対象サイトへの過剰なアクセスを避けるため、直近1分以内の結果を再利用します。
+
 チャットの機能仕様は
 [docs/chat-specification.md](docs/chat-specification.md)、実装単位と検証範囲は
 [docs/chat-implementation-plan.md](docs/chat-implementation-plan.md)、受け入れ条件と

@@ -63,6 +63,17 @@ Deno.test("chat health endpoint is available", async () => {
   assert(body.service === "chat", "health response should identify chat");
 });
 
+Deno.test("hotel availability history page is served", async () => {
+  const response = await handleRequest(
+    new Request("http://localhost/hotel/"),
+  );
+  assert(response.status === 200, "hotel history route should return 200");
+  assert(
+    (await response.text()).includes("SARA GRANDE 五反田"),
+    "hotel route should serve the history interface",
+  );
+});
+
 Deno.test("timer state and saved documents still round-trip beside chat", async () => {
   const kv = await Deno.openKv(":memory:");
   try {
