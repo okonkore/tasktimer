@@ -25,10 +25,7 @@ import {
   ChatNotificationService,
   createChatNotificationHandler,
 } from "./chat/notifications.ts";
-import {
-  checkHotelAvailability,
-  handleHotelMonitorRequest,
-} from "./hotel_monitor.ts";
+import { handleHotelMonitorRequest } from "./hotel_monitor.ts";
 
 let productionKvPromise: Promise<Deno.Kv> | null = null;
 
@@ -250,24 +247,6 @@ export async function handleRequest(
 }
 
 if (import.meta.main) {
-  Deno.cron(
-    "sara-grande-availability-every-5-minutes",
-    "*/5 * * * *",
-    async () => {
-      const record = await checkHotelAvailability({
-        kv: await resolveKv(),
-      });
-      if (record.ok) {
-        console.log(
-          `SARA GRANDE: ${
-            record.available?.label ?? "不明"
-          } (${record.checkedAt})`,
-        );
-      } else {
-        console.error(`SARA GRANDE monitor failed: ${record.error}`);
-      }
-    },
-  );
   Deno.serve((request, info) =>
     handleRequest(request, { clientIp: info.remoteAddr.hostname })
   );
