@@ -6,7 +6,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#152d2a" />
     <title>ローカルカメラ - Paradise Timer</title>
-    <link rel="stylesheet" href="/camera/styles.css?v=20260817" />
+    <link rel="stylesheet" href="/camera/styles.css?v=20260817-menu" />
   </head>
   <body>
     <main class="camera-shell">
@@ -81,27 +81,40 @@
     <dialog class="photo-dialog" id="photoDialog">
       <div class="dialog-shell">
         <header>
-          <div>
+          <div class="dialog-meta">
             <strong id="dialogDate">撮影した写真</strong>
             <small id="dialogSize"></small>
           </div>
-          <button class="close-button" id="closeDialog" type="button"
-            aria-label="閉じる">×</button>
+          <div class="dialog-header-actions">
+            <button class="more-button" id="openPhotoActions" type="button"
+              aria-label="写真の操作メニューを開く" aria-expanded="false"
+              aria-controls="photoActionMenu">…</button>
+            <button class="close-button" id="closeDialog" type="button"
+              aria-label="閉じる">×</button>
+          </div>
         </header>
         <div class="dialog-image-wrap">
           <img id="dialogImage" alt="撮影した写真の拡大表示" />
         </div>
-        <div class="dialog-actions">
-          <button class="save-button" id="saveToPhotos"
-            type="button">写真アプリへ保存</button>
-          <button class="adjust-button" id="adjustPhoto"
-            type="button">範囲を調整</button>
-          <button class="delete-button" id="deletePhoto"
-            type="button">この写真を削除</button>
+        <p class="dialog-help" id="saveHelp" role="status"></p>
+        <div class="photo-action-menu" id="photoActionMenu" hidden>
+          <button class="action-menu-scrim" id="closePhotoActions"
+            type="button" aria-label="写真の操作メニューを閉じる"></button>
+          <div class="action-sheet" role="menu" aria-label="写真の操作">
+            <div class="action-sheet-group">
+              <button id="saveToPhotos" type="button" role="menuitem">
+                写真アプリへ保存
+              </button>
+              <button id="adjustPhoto" type="button" role="menuitem">
+                範囲を調整
+              </button>
+              <button class="action-delete" id="deletePhoto" type="button"
+                role="menuitem">この写真を削除</button>
+            </div>
+            <button class="action-cancel" id="cancelPhotoActions"
+              type="button">キャンセル</button>
+          </div>
         </div>
-        <p class="dialog-help" id="saveHelp">
-          iPhoneの共有画面が開いたら「画像を保存」を選んでください。
-        </p>
       </div>
     </dialog>
 
@@ -132,6 +145,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/camera/client.js?v=20260817-cheki"></script>
+    <script type="module" src="/camera/client.js?v=20260817-menu"></script>
   </body>
 </html>

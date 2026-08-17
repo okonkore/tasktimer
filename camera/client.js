@@ -24,6 +24,10 @@ const els = {
   dialogDate: document.querySelector("#dialogDate"),
   dialogSize: document.querySelector("#dialogSize"),
   closeDialog: document.querySelector("#closeDialog"),
+  openPhotoActions: document.querySelector("#openPhotoActions"),
+  photoActionMenu: document.querySelector("#photoActionMenu"),
+  closePhotoActions: document.querySelector("#closePhotoActions"),
+  cancelPhotoActions: document.querySelector("#cancelPhotoActions"),
   saveToPhotos: document.querySelector("#saveToPhotos"),
   adjustPhoto: document.querySelector("#adjustPhoto"),
   deletePhoto: document.querySelector("#deletePhoto"),
@@ -54,10 +58,28 @@ els.closeDialog.addEventListener("click", closePhotoDialog);
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) closePhotoDialog();
 });
+els.dialog.addEventListener("cancel", (event) => {
+  if (!els.photoActionMenu.hidden) {
+    event.preventDefault();
+    closePhotoActionMenu();
+  }
+});
 els.dialog.addEventListener("close", clearDialogPhoto);
-els.saveToPhotos.addEventListener("click", () => void saveSelectedToPhotos());
-els.adjustPhoto.addEventListener("click", () => void adjustSelectedPhoto());
-els.deletePhoto.addEventListener("click", () => void deleteSelectedPhoto());
+els.openPhotoActions.addEventListener("click", openPhotoActionMenu);
+els.closePhotoActions.addEventListener("click", closePhotoActionMenu);
+els.cancelPhotoActions.addEventListener("click", closePhotoActionMenu);
+els.saveToPhotos.addEventListener("click", () => {
+  closePhotoActionMenu();
+  void saveSelectedToPhotos();
+});
+els.adjustPhoto.addEventListener("click", () => {
+  closePhotoActionMenu();
+  void adjustSelectedPhoto();
+});
+els.deletePhoto.addEventListener("click", () => {
+  closePhotoActionMenu();
+  void deleteSelectedPhoto();
+});
 els.requestPersistence.addEventListener(
   "click",
   () => void requestPersistentStorage(),
@@ -234,9 +256,8 @@ function openPhotoDialog(photo) {
   els.dialogSize.textContent = `${formatBytes(displayBlob.size)} · ${
     photo.cropBlob ? "チェキ範囲のみ" : "元の写真"
   }`;
-  els.saveHelp.textContent = navigator.share
-    ? "共有画面が開いたら「画像を保存」を選んでください。"
-    : "保存先を選択して写真をダウンロードしてください。";
+  els.saveHelp.textContent = "";
+  closePhotoActionMenu();
   els.dialog.showModal();
 }
 
@@ -245,9 +266,24 @@ function closePhotoDialog() {
 }
 
 function clearDialogPhoto() {
+  closePhotoActionMenu();
   selectedPhoto = null;
   els.dialogImage.removeAttribute("src");
   clearDialogUrl();
+}
+
+function openPhotoActionMenu() {
+  els.saveHelp.textContent = "";
+  els.photoActionMenu.hidden = false;
+  els.openPhotoActions.setAttribute("aria-expanded", "true");
+  els.saveToPhotos.focus();
+}
+
+function closePhotoActionMenu() {
+  if (els.photoActionMenu.hidden) return;
+  els.photoActionMenu.hidden = true;
+  els.openPhotoActions.setAttribute("aria-expanded", "false");
+  if (els.dialog.open) els.openPhotoActions.focus();
 }
 
 async function adjustSelectedPhoto() {

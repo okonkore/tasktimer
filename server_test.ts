@@ -99,6 +99,10 @@ Deno.test("local camera page is served with blob images allowed", async () => {
     "camera route should include the crop editor",
   );
   assert(
+    html.includes('id="photoActionMenu"'),
+    "photo viewer should include a compact action menu",
+  );
+  assert(
     html.includes('type="module"'),
     "camera client should load as a module for local detector imports",
   );
