@@ -104,6 +104,27 @@ export function isUsableQuadrilateral(points) {
   return true;
 }
 
+export function getChekiMiniOutputSize(
+  estimatedWidth,
+  estimatedHeight,
+  maximum = 1600,
+) {
+  const width = Math.max(1, Number(estimatedWidth) || 1);
+  const height = Math.max(1, Number(estimatedHeight) || 1);
+  const landscape = width > height;
+  const maximumLongEdge = Math.max(86, Math.floor(Number(maximum) || 1600));
+  const sourceLongEdge = Math.max(86, width, height);
+  const units = Math.max(
+    1,
+    Math.floor(Math.min(maximumLongEdge, sourceLongEdge) / 86),
+  );
+  const shortEdge = 54 * units;
+  const longEdge = 86 * units;
+  return landscape
+    ? { width: longEdge, height: shortEdge }
+    : { width: shortEdge, height: longEdge };
+}
+
 export function createProjectiveMap(points, width, height) {
   const corners = orderCorners(points).map((point) => ({
     x: point.x * width,

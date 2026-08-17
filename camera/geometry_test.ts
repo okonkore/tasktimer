@@ -1,6 +1,7 @@
 import {
   createProjectiveMap,
   detectChekiCorners,
+  getChekiMiniOutputSize,
   isUsableQuadrilateral,
   orderCorners,
 } from "./geometry.js";
@@ -84,6 +85,35 @@ Deno.test("projective map preserves all four selected corners", () => {
       "mapped corner should match",
     );
   });
+});
+
+Deno.test("cheki mini output keeps the physical 54 by 86 aspect ratio", () => {
+  const portrait = getChekiMiniOutputSize(723, 1189);
+  assert(
+    portrait.width / portrait.height === 54 / 86,
+    "portrait ratio should be 54:86",
+  );
+  assert(
+    portrait.height <= 1600,
+    "portrait output should respect the size limit",
+  );
+
+  const landscape = getChekiMiniOutputSize(1189, 723);
+  assert(
+    landscape.width / landscape.height === 86 / 54,
+    "landscape ratio should be 86:54",
+  );
+  assert(
+    landscape.width <= 1600,
+    "landscape output should respect the size limit",
+  );
+
+  const limited = getChekiMiniOutputSize(3000, 5000, 800);
+  assert(
+    limited.width / limited.height === 54 / 86,
+    "limited output should keep its ratio",
+  );
+  assert(limited.height <= 800, "custom size limit should be respected");
 });
 
 function insidePolygon(x: number, y: number, polygon: number[][]): boolean {

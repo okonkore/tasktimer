@@ -2,9 +2,10 @@ import {
   createProjectiveMap,
   defaultCorners,
   detectChekiCorners,
+  getChekiMiniOutputSize,
   isUsableQuadrilateral,
   orderCorners,
-} from "./geometry.js";
+} from "./geometry.js?v=20260817-aspect";
 
 const databaseName = "paradise-local-camera";
 const storeName = "photos";
@@ -554,20 +555,10 @@ async function createPerspectiveCrop(image, corners) {
     distancePoints(pixelCorners[0], pixelCorners[3]) +
     distancePoints(pixelCorners[1], pixelCorners[2])
   ) / 2;
-  const maximumOutput = 1600;
-  const outputScale = Math.min(
-    1,
-    maximumOutput / Math.max(estimatedWidth, estimatedHeight),
-  );
-  const outputWidth = clamp(
-    Math.round(estimatedWidth * outputScale),
-    64,
-    maximumOutput,
-  );
-  const outputHeight = clamp(
-    Math.round(estimatedHeight * outputScale),
-    64,
-    maximumOutput,
+  const { width: outputWidth, height: outputHeight } = getChekiMiniOutputSize(
+    estimatedWidth,
+    estimatedHeight,
+    1600,
   );
   const outputCanvas = document.createElement("canvas");
   outputCanvas.width = outputWidth;
