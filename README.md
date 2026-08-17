@@ -11,6 +11,10 @@
 `hotel-monitor` 接頭辞のKVへ記録します。対象サイトへの過剰なアクセスを
 避けるため、直近1分以内の結果を再利用します。
 
+`/camera/` ではiPhoneのカメラを起動し、撮影した写真をブラウザのIndexedDBへ
+保存します。写真はサーバーやDeno KVへ送信しません。写真一覧からiOSの共有画面を
+開いて写真アプリへ保存でき、端末内の写真だけを削除することもできます。
+
 チャットの機能仕様は
 [docs/chat-specification.md](docs/chat-specification.md)、実装単位と検証範囲は
 [docs/chat-implementation-plan.md](docs/chat-implementation-plan.md)、受け入れ条件と

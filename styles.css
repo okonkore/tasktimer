@@ -104,6 +104,7 @@ button:disabled {
   gap: 6px;
 }
 
+.camera-button,
 .hotel-button,
 .chat-button {
   display: inline-grid;
@@ -119,6 +120,7 @@ button:disabled {
   text-decoration: none;
 }
 
+.camera-button,
 .hotel-button {
   color: var(--accent);
   background: #fff;

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#152d2a" />
+    <title>ローカルカメラ - Paradise Timer</title>
+    <link rel="stylesheet" href="/camera/styles.css?v=20260817" />
+  </head>
+  <body>
+    <main class="camera-shell">
+      <header class="camera-header">
+        <a class="back-link" href="/" aria-label="タイマーへ戻る">←</a>
+        <div>
+          <p class="eyebrow">iPhone ローカル保存</p>
+          <h1>カメラ</h1>
+        </div>
+        <span class="local-badge">端末内のみ</span>
+      </header>
+
+      <section class="capture-card" aria-labelledby="captureTitle">
+        <div class="lens-mark" aria-hidden="true"><span></span></div>
+        <div class="capture-copy">
+          <h2 id="captureTitle">撮影して、この端末に保存</h2>
+          <p>写真はサーバーへ送信せず、このWebアプリ専用の保存領域に保管します。</p>
+        </div>
+        <button class="capture-button" id="captureButton" type="button">
+          <span class="camera-icon" aria-hidden="true"></span>
+          カメラを起動
+        </button>
+        <input
+          id="cameraInput"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          aria-label="カメラで写真を撮影"
+          hidden
+        />
+        <p class="capture-status" id="captureStatus" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="library-panel" aria-labelledby="libraryTitle">
+        <div class="library-heading">
+          <div>
+            <p class="eyebrow">LOCAL LIBRARY</p>
+            <h2 id="libraryTitle">保存した写真</h2>
+          </div>
+          <div class="library-count">
+            <strong id="photoCount">0</strong><span>枚</span>
+          </div>
+        </div>
+
+        <div class="storage-row">
+          <span id="storageUsage">使用容量を確認中…</span>
+          <button class="text-button" id="requestPersistence" type="button">保存を安定させる</button>
+        </div>
+
+        <div class="photo-grid" id="photoGrid"></div>
+        <div class="empty-library" id="emptyLibrary">
+          <span class="empty-icon" aria-hidden="true"></span>
+          <p>まだ写真はありません</p>
+          <small>「カメラを起動」から撮影すると、ここに保存されます。</small>
+        </div>
+      </section>
+
+      <aside class="privacy-note">
+        <strong>保存について</strong>
+        <p>
+          Safariの履歴・Webサイトデータを消去すると、写真も消える場合があります。残したい写真は
+          「写真アプリへ保存」も行ってください。Safariとホーム画面版では保存領域が分かれる場合があります。
+        </p>
+      </aside>
+    </main>
+
+    <dialog class="photo-dialog" id="photoDialog">
+      <div class="dialog-shell">
+        <header>
+          <div>
+            <strong id="dialogDate">撮影した写真</strong>
+            <small id="dialogSize"></small>
+          </div>
+          <button class="close-button" id="closeDialog" type="button" aria-label="閉じる">×</button>
+        </header>
+        <div class="dialog-image-wrap">
+          <img id="dialogImage" alt="撮影した写真の拡大表示" />
+        </div>
+        <div class="dialog-actions">
+          <button class="save-button" id="saveToPhotos" type="button">写真アプリへ保存</button>
+          <button class="delete-button" id="deletePhoto" type="button">この写真を削除</button>
+        </div>
+        <p class="dialog-help" id="saveHelp">
+          iPhoneの共有画面が開いたら「画像を保存」を選んでください。
+        </p>
+      </div>
+    </dialog>
+
+    <script src="/camera/client.js?v=20260817"></script>
+  </body>
+</html>

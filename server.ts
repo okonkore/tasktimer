@@ -60,6 +60,14 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "hotel/styles.css",
     contentType: "text/css; charset=utf-8",
   }],
+  ["/camera/client.js", {
+    path: "camera/client.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/camera/styles.css", {
+    path: "camera/styles.css",
+    contentType: "text/css; charset=utf-8",
+  }],
   ["/chat/client.js", {
     path: "chat/client.js",
     contentType: "text/javascript; charset=utf-8",
@@ -222,6 +230,8 @@ export async function handleRequest(
       ? { path: "chat/index.html", contentType: "text/html; charset=utf-8" }
       : url.pathname === "/hotel" || url.pathname === "/hotel/"
       ? { path: "hotel/index.html", contentType: "text/html; charset=utf-8" }
+      : url.pathname === "/camera" || url.pathname === "/camera/"
+      ? { path: "camera/index.html", contentType: "text/html; charset=utf-8" }
       : undefined);
   if (!file) return new Response("Not found", { status: 404 });
 
@@ -235,7 +245,7 @@ export async function handleRequest(
           : "public, max-age=3600",
         "x-content-type-options": "nosniff",
         "content-security-policy":
-          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         "referrer-policy": "same-origin",
         "x-frame-options": "DENY",
       },

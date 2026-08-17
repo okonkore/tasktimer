@@ -74,6 +74,28 @@ Deno.test("hotel availability history page is served", async () => {
   );
 });
 
+Deno.test("local camera page is served with blob images allowed", async () => {
+  const response = await handleRequest(
+    new Request("http://localhost/camera/"),
+  );
+  assert(response.status === 200, "camera route should return 200");
+  assert(
+    response.headers.get("content-security-policy")?.includes(
+      "img-src 'self' data: blob:",
+    ),
+    "camera previews should be allowed by the image CSP",
+  );
+  const html = await response.text();
+  assert(
+    html.includes('capture="environment"'),
+    "camera route should request the rear iPhone camera",
+  );
+  assert(
+    html.includes("端末内のみ"),
+    "camera route should explain its local-only storage",
+  );
+});
+
 Deno.test("timer state and saved documents still round-trip beside chat", async () => {
   const kv = await Deno.openKv(":memory:");
   try {
