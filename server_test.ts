@@ -94,6 +94,25 @@ Deno.test("local camera page is served with blob images allowed", async () => {
     html.includes("端末内のみ"),
     "camera route should explain its local-only storage",
   );
+  assert(
+    html.includes('id="cropCanvas"'),
+    "camera route should include the crop editor",
+  );
+  assert(
+    html.includes('type="module"'),
+    "camera client should load as a module for local detector imports",
+  );
+});
+
+Deno.test("camera geometry module is served", async () => {
+  const response = await handleRequest(
+    new Request("http://localhost/camera/geometry.js"),
+  );
+  assert(response.status === 200, "geometry module should return 200");
+  assert(
+    (await response.text()).includes("detectChekiCorners"),
+    "geometry module should expose the local cheki detector",
+  );
 });
 
 Deno.test("timer state and saved documents still round-trip beside chat", async () => {

@@ -2,7 +2,8 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#152d2a" />
     <title>ローカルカメラ - Paradise Timer</title>
     <link rel="stylesheet" href="/camera/styles.css?v=20260817" />
@@ -21,8 +22,11 @@
       <section class="capture-card" aria-labelledby="captureTitle">
         <div class="lens-mark" aria-hidden="true"><span></span></div>
         <div class="capture-copy">
-          <h2 id="captureTitle">撮影して、この端末に保存</h2>
-          <p>写真はサーバーへ送信せず、このWebアプリ専用の保存領域に保管します。</p>
+          <h2 id="captureTitle">チェキを撮影して切り抜く</h2>
+          <p>
+            チェキの四隅を自動検出し、必要なら手動で調整できます。写真と四隅のデータは
+            サーバーへ送信せず、この端末だけに保存します。
+          </p>
         </div>
         <button class="capture-button" id="captureButton" type="button">
           <span class="camera-icon" aria-hidden="true"></span>
@@ -36,7 +40,8 @@
           aria-label="カメラで写真を撮影"
           hidden
         />
-        <p class="capture-status" id="captureStatus" role="status" aria-live="polite"></p>
+        <p class="capture-status" id="captureStatus" role="status"
+          aria-live="polite"></p>
       </section>
 
       <section class="library-panel" aria-labelledby="libraryTitle">
@@ -52,14 +57,15 @@
 
         <div class="storage-row">
           <span id="storageUsage">使用容量を確認中…</span>
-          <button class="text-button" id="requestPersistence" type="button">保存を安定させる</button>
+          <button class="text-button" id="requestPersistence"
+            type="button">保存を安定させる</button>
         </div>
 
         <div class="photo-grid" id="photoGrid"></div>
         <div class="empty-library" id="emptyLibrary">
           <span class="empty-icon" aria-hidden="true"></span>
           <p>まだ写真はありません</p>
-          <small>「カメラを起動」から撮影すると、ここに保存されます。</small>
+          <small>撮影後に四隅を確認すると、切り抜いたチェキがここに保存されます。</small>
         </div>
       </section>
 
@@ -79,14 +85,19 @@
             <strong id="dialogDate">撮影した写真</strong>
             <small id="dialogSize"></small>
           </div>
-          <button class="close-button" id="closeDialog" type="button" aria-label="閉じる">×</button>
+          <button class="close-button" id="closeDialog" type="button"
+            aria-label="閉じる">×</button>
         </header>
         <div class="dialog-image-wrap">
           <img id="dialogImage" alt="撮影した写真の拡大表示" />
         </div>
         <div class="dialog-actions">
-          <button class="save-button" id="saveToPhotos" type="button">写真アプリへ保存</button>
-          <button class="delete-button" id="deletePhoto" type="button">この写真を削除</button>
+          <button class="save-button" id="saveToPhotos"
+            type="button">写真アプリへ保存</button>
+          <button class="adjust-button" id="adjustPhoto"
+            type="button">範囲を調整</button>
+          <button class="delete-button" id="deletePhoto"
+            type="button">この写真を削除</button>
         </div>
         <p class="dialog-help" id="saveHelp">
           iPhoneの共有画面が開いたら「画像を保存」を選んでください。
@@ -94,6 +105,33 @@
       </div>
     </dialog>
 
-    <script src="/camera/client.js?v=20260817"></script>
+    <dialog class="crop-dialog" id="cropDialog">
+      <div class="crop-shell">
+        <header class="crop-header">
+          <div>
+            <p class="eyebrow">CHEKI DETECTION</p>
+            <h2 id="cropTitle">チェキの四隅を確認</h2>
+          </div>
+          <span class="crop-status" id="cropStatus">自動検出中…</span>
+        </header>
+        <div class="crop-stage">
+          <canvas id="cropCanvas"
+            aria-label="チェキの切り抜き範囲を調整"></canvas>
+        </div>
+        <p class="crop-hint" id="cropHint">
+          4つの丸を指で動かして、チェキの角に合わせてください。
+        </p>
+        <div class="crop-actions">
+          <button class="crop-cancel" id="cancelCrop"
+            type="button">キャンセル</button>
+          <button class="crop-detect" id="detectAgain"
+            type="button">自動検出し直す</button>
+          <button class="crop-save" id="saveCrop"
+            type="button">この範囲で保存</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="/camera/client.js?v=20260817-cheki"></script>
   </body>
 </html>

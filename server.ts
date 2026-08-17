@@ -64,6 +64,10 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "camera/client.js",
     contentType: "text/javascript; charset=utf-8",
   }],
+  ["/camera/geometry.js", {
+    path: "camera/geometry.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
   ["/camera/styles.css", {
     path: "camera/styles.css",
     contentType: "text/css; charset=utf-8",
