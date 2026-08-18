@@ -558,7 +558,7 @@ button:disabled {
 }
 .crop-actions {
   display: grid;
-  grid-template-columns: auto auto minmax(150px, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 .crop-actions button {
@@ -572,7 +572,8 @@ button:disabled {
   color: #fff;
   background: transparent;
 }
-.crop-detect {
+.crop-detect,
+.crop-rotate {
   border: 1px solid rgba(112,197,184,.55);
   color: #a9f1e2;
   background: transparent;
@@ -581,6 +582,8 @@ button:disabled {
   border: 0;
   color: var(--night);
   background: #fff;
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 @media (max-width: 640px) {
@@ -614,8 +617,7 @@ button:disabled {
   .crop-actions {
     grid-template-columns: 1fr 1fr;
   }
-  .crop-save {
+  .crop-rotate {
     grid-column: 1 / -1;
-    grid-row: 1;
   }
 }

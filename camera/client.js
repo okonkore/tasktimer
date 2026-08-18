@@ -5,7 +5,8 @@ import {
   getChekiMiniOutputSize,
   isUsableQuadrilateral,
   orderCorners,
-} from "./geometry.js?v=20260817-aspect";
+  rotateCornersClockwise,
+} from "./geometry.js?v=20260818-rotation";
 
 const databaseName = "paradise-local-camera";
 const storeName = "photos";
@@ -40,6 +41,7 @@ const els = {
   cropHint: document.querySelector("#cropHint"),
   cancelCrop: document.querySelector("#cancelCrop"),
   detectAgain: document.querySelector("#detectAgain"),
+  rotateCrop: document.querySelector("#rotateCrop"),
   saveCrop: document.querySelector("#saveCrop"),
 };
 
@@ -52,6 +54,7 @@ let editorImage = null;
 let editorCorners = defaultCorners();
 let editorIsNew = false;
 let activeCorner = -1;
+let editorRotation = 0;
 
 els.captureButton.addEventListener("click", () => els.cameraInput.click());
 els.cameraInput.addEventListener("change", () => void captureSelectedPhoto());
@@ -87,6 +90,7 @@ els.requestPersistence.addEventListener(
 );
 els.cancelCrop.addEventListener("click", closeCropEditor);
 els.detectAgain.addEventListener("click", () => void detectEditorFrame());
+els.rotateCrop.addEventListener("click", rotateCropClockwise);
 els.saveCrop.addEventListener("click", () => void saveEditorCrop());
 els.cropCanvas.addEventListener("pointerdown", beginCornerDrag);
 els.cropCanvas.addEventListener("pointermove", moveCornerDrag);
@@ -304,6 +308,7 @@ async function openCropEditor(photo, isNew, preloadedImage = null) {
   editorIsNew = isNew;
   editorImage = preloadedImage || await loadImage(photo.blob);
   editorCorners = orderCorners(photo.corners || defaultCorners());
+  editorRotation = normalizeQuarterTurns(photo.rotation);
   els.cropTitle.textContent = isNew ? "チェキの四隅を確認" : "チェキ範囲を調整";
   updateCropStatus(photo.detectionConfidence, photo.detectionMethod);
   if (!els.cropDialog.open) els.cropDialog.showModal();
@@ -316,6 +321,7 @@ function closeCropEditor() {
   editorImage = null;
   editorCorners = defaultCorners();
   activeCorner = -1;
+  editorRotation = 0;
   if (editorIsNew) setStatus("撮影した写真の保存をキャンセルしました");
   editorIsNew = false;
 }
@@ -325,7 +331,7 @@ async function detectEditorFrame() {
   els.detectAgain.disabled = true;
   els.cropHint.textContent = "四隅を再検出しています…";
   await nextFrame();
-  const detection = detectFrameFromImage(editorImage);
+  const detection = detectFrameFromImage(editorImage, editorRotation);
   editorCorners = orderCorners(detection.corners);
   editorPhoto.detectionMethod = detection.method;
   editorPhoto.detectionConfidence = detection.confidence;
@@ -334,19 +340,27 @@ async function detectEditorFrame() {
   els.detectAgain.disabled = false;
 }
 
-function detectFrameFromImage(image) {
+function rotateCropClockwise() {
+  if (!editorImage) return;
+  editorRotation = (editorRotation + 1) % 4;
+  editorCorners = rotateCornersClockwise(editorCorners);
+  resizeCropEditor();
+}
+
+function detectFrameFromImage(image, rotation = 0) {
+  const oriented = orientedImageSize(image, rotation);
   const maximum = 260;
   const scale = Math.min(
     1,
-    maximum / Math.max(image.naturalWidth, image.naturalHeight),
+    maximum / Math.max(oriented.width, oriented.height),
   );
-  const width = Math.max(12, Math.round(image.naturalWidth * scale));
-  const height = Math.max(12, Math.round(image.naturalHeight * scale));
+  const width = Math.max(12, Math.round(oriented.width * scale));
+  const height = Math.max(12, Math.round(oriented.height * scale));
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  context.drawImage(image, 0, 0, width, height);
+  drawOrientedImage(context, image, width, height, rotation);
   return detectChekiCorners(context.getImageData(0, 0, width, height));
 }
 
@@ -365,20 +379,21 @@ function updateCropStatus(confidence, method) {
 
 function resizeCropEditor() {
   if (!els.cropDialog.open || !editorImage) return;
+  const oriented = orientedImageSize(editorImage, editorRotation);
   const maximumWidth = Math.min(globalThis.innerWidth - 28, 720);
   const maximumHeight = Math.min(globalThis.innerHeight * 0.61, 720);
   const scale = Math.min(
-    maximumWidth / editorImage.naturalWidth,
-    maximumHeight / editorImage.naturalHeight,
+    maximumWidth / oriented.width,
+    maximumHeight / oriented.height,
     1,
   );
   els.cropCanvas.width = Math.max(
     1,
-    Math.round(editorImage.naturalWidth * scale),
+    Math.round(oriented.width * scale),
   );
   els.cropCanvas.height = Math.max(
     1,
-    Math.round(editorImage.naturalHeight * scale),
+    Math.round(oriented.height * scale),
   );
   renderCropEditor();
 }
@@ -392,13 +407,25 @@ function renderCropEditor() {
     y: point.y * canvas.height,
   }));
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(editorImage, 0, 0, canvas.width, canvas.height);
+  drawOrientedImage(
+    context,
+    editorImage,
+    canvas.width,
+    canvas.height,
+    editorRotation,
+  );
   context.fillStyle = "rgba(2, 10, 9, .62)";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.save();
   tracePolygon(context, points);
   context.clip();
-  context.drawImage(editorImage, 0, 0, canvas.width, canvas.height);
+  drawOrientedImage(
+    context,
+    editorImage,
+    canvas.width,
+    canvas.height,
+    editorRotation,
+  );
   context.restore();
   tracePolygon(context, points);
   context.strokeStyle = "#7ef0da";
@@ -488,12 +515,17 @@ async function saveEditorCrop() {
   }
   els.saveCrop.disabled = true;
   els.detectAgain.disabled = true;
+  els.rotateCrop.disabled = true;
   els.cropHint.className = "crop-hint";
   els.cropHint.textContent = "チェキ範囲だけを生成しています…";
   await nextFrame();
 
   try {
-    const cropBlob = await createPerspectiveCrop(editorImage, ordered);
+    const cropBlob = await createPerspectiveCrop(
+      editorImage,
+      ordered,
+      editorRotation,
+    );
     const now = new Date().toISOString();
     const photo = {
       ...editorPhoto,
@@ -503,6 +535,7 @@ async function saveEditorCrop() {
       cropBlob,
       cropType: "image/jpeg",
       cropSize: cropBlob.size,
+      rotation: editorRotation,
       updatedAt: now,
     };
     await putPhoto(photo);
@@ -520,19 +553,21 @@ async function saveEditorCrop() {
   } finally {
     els.saveCrop.disabled = false;
     els.detectAgain.disabled = false;
+    els.rotateCrop.disabled = false;
   }
 }
 
-async function createPerspectiveCrop(image, corners) {
+async function createPerspectiveCrop(image, corners, rotation = 0) {
+  const oriented = orientedImageSize(image, rotation);
   const maximumSource = 2200;
   const sourceScale = Math.min(
     1,
-    maximumSource / Math.max(image.naturalWidth, image.naturalHeight),
+    maximumSource / Math.max(oriented.width, oriented.height),
   );
-  const sourceWidth = Math.max(2, Math.round(image.naturalWidth * sourceScale));
+  const sourceWidth = Math.max(2, Math.round(oriented.width * sourceScale));
   const sourceHeight = Math.max(
     2,
-    Math.round(image.naturalHeight * sourceScale),
+    Math.round(oriented.height * sourceScale),
   );
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = sourceWidth;
@@ -540,7 +575,7 @@ async function createPerspectiveCrop(image, corners) {
   const sourceContext = sourceCanvas.getContext("2d", {
     willReadFrequently: true,
   });
-  sourceContext.drawImage(image, 0, 0, sourceWidth, sourceHeight);
+  drawOrientedImage(sourceContext, image, sourceWidth, sourceHeight, rotation);
   const source = sourceContext.getImageData(0, 0, sourceWidth, sourceHeight);
   const ordered = orderCorners(corners);
   const pixelCorners = ordered.map((point) => ({
@@ -619,6 +654,39 @@ function loadImage(blob) {
     }, { once: true });
     image.src = url;
   });
+}
+
+function normalizeQuarterTurns(value) {
+  const turns = Math.trunc(Number(value) || 0) % 4;
+  return turns < 0 ? turns + 4 : turns;
+}
+
+function orientedImageSize(image, rotation) {
+  const turns = normalizeQuarterTurns(rotation);
+  return turns % 2
+    ? { width: image.naturalHeight, height: image.naturalWidth }
+    : { width: image.naturalWidth, height: image.naturalHeight };
+}
+
+function drawOrientedImage(context, image, width, height, rotation) {
+  const turns = normalizeQuarterTurns(rotation);
+  context.save();
+  if (turns === 1) {
+    context.translate(width, 0);
+    context.rotate(Math.PI / 2);
+    context.drawImage(image, 0, 0, height, width);
+  } else if (turns === 2) {
+    context.translate(width, height);
+    context.rotate(Math.PI);
+    context.drawImage(image, 0, 0, width, height);
+  } else if (turns === 3) {
+    context.translate(0, height);
+    context.rotate(-Math.PI / 2);
+    context.drawImage(image, 0, 0, height, width);
+  } else {
+    context.drawImage(image, 0, 0, width, height);
+  }
+  context.restore();
 }
 
 async function saveSelectedToPhotos() {

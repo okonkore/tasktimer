@@ -4,6 +4,7 @@ import {
   getChekiMiniOutputSize,
   isUsableQuadrilateral,
   orderCorners,
+  rotateCornersClockwise,
 } from "./geometry.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -114,6 +115,29 @@ Deno.test("cheki mini output keeps the physical 54 by 86 aspect ratio", () => {
     "limited output should keep its ratio",
   );
   assert(limited.height <= 800, "custom size limit should be respected");
+});
+
+Deno.test("clockwise rotation keeps corners aligned with the rotated image", () => {
+  const original = [
+    { x: 0.1, y: 0.2 },
+    { x: 0.8, y: 0.2 },
+    { x: 0.8, y: 0.9 },
+    { x: 0.1, y: 0.9 },
+  ];
+  const rotated = rotateCornersClockwise(original);
+  const expected = [
+    { x: 0.1, y: 0.1 },
+    { x: 0.8, y: 0.1 },
+    { x: 0.8, y: 0.8 },
+    { x: 0.1, y: 0.8 },
+  ];
+  rotated.forEach((corner, index) => {
+    assert(
+      Math.hypot(corner.x - expected[index].x, corner.y - expected[index].y) <
+        0.0001,
+      `rotated corner ${index} should follow the image`,
+    );
+  });
 });
 
 function insidePolygon(x: number, y: number, polygon: number[][]): boolean {

@@ -84,6 +84,15 @@ export function orderCorners(points) {
   return ordered.slice(start).concat(ordered.slice(0, start));
 }
 
+export function rotateCornersClockwise(points) {
+  return orderCorners(
+    orderCorners(points).map((point) => ({
+      x: 1 - point.y,
+      y: point.x,
+    })),
+  );
+}
+
 export function isUsableQuadrilateral(points) {
   const ordered = orderCorners(points);
   const area = Math.abs(
