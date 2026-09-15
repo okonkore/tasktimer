@@ -337,10 +337,15 @@ export async function handleRequest(
 
   try {
     const body = await Deno.readFile(new URL(file.path, import.meta.url));
+    const isGodotRuntime = file.path === "games/shield-tap/index.wasm";
+    const isVersionedGodotPack = /^games\/shield-tap\/index-v\d+\.pck$/
+      .test(file.path);
     return new Response(request.method === "HEAD" ? null : body, {
       headers: {
         "content-type": file.contentType,
-        "cache-control": file.contentType.startsWith("text/html")
+        "cache-control": isGodotRuntime || isVersionedGodotPack
+          ? "public, max-age=31536000, immutable"
+          : file.contentType.startsWith("text/html")
           ? "no-cache"
           : "public, max-age=3600",
         "x-content-type-options": "nosniff",
