@@ -92,6 +92,10 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "games/shield-tap/index.js",
     contentType: "text/javascript; charset=utf-8",
   }],
+  ["/games/shield-tap/index.boot.js", {
+    path: "games/shield-tap/index.boot.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
   ["/games/shield-tap/index.audio.worklet.js", {
     path: "games/shield-tap/index.audio.worklet.js",
     contentType: "text/javascript; charset=utf-8",
