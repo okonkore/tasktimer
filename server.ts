@@ -340,10 +340,15 @@ export async function handleRequest(
     const isGodotRuntime = file.path === "games/shield-tap/index.wasm";
     const isVersionedGodotPack = /^games\/shield-tap\/index-v\d+\.pck$/
       .test(file.path);
+    const isGodotImage = [
+      "games/shield-tap/index.png",
+      "games/shield-tap/index.icon.png",
+      "games/shield-tap/index.apple-touch-icon.png",
+    ].includes(file.path);
     return new Response(request.method === "HEAD" ? null : body, {
       headers: {
         "content-type": file.contentType,
-        "cache-control": isGodotRuntime || isVersionedGodotPack
+        "cache-control": isGodotRuntime || isVersionedGodotPack || isGodotImage
           ? "public, max-age=31536000, immutable"
           : file.contentType.startsWith("text/html")
           ? "no-cache"
