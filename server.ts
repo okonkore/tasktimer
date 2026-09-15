@@ -132,6 +132,10 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "games/shield-tap/index-v6.pck",
     contentType: "application/octet-stream",
   }],
+  ["/games/shield-tap/index-v7.pck", {
+    path: "games/shield-tap/index-v7.pck",
+    contentType: "application/octet-stream",
+  }],
   ["/games/shield-tap/index.png", {
     path: "games/shield-tap/index.png",
     contentType: "image/png",
