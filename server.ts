@@ -80,6 +80,46 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
     path: "chat/styles.css",
     contentType: "text/css; charset=utf-8",
   }],
+  ["/games/shield-tap/", {
+    path: "games/shield-tap/index.html",
+    contentType: "text/html; charset=utf-8",
+  }],
+  ["/games/shield-tap/index.html", {
+    path: "games/shield-tap/index.html",
+    contentType: "text/html; charset=utf-8",
+  }],
+  ["/games/shield-tap/index.js", {
+    path: "games/shield-tap/index.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/games/shield-tap/index.audio.worklet.js", {
+    path: "games/shield-tap/index.audio.worklet.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/games/shield-tap/index.audio.position.worklet.js", {
+    path: "games/shield-tap/index.audio.position.worklet.js",
+    contentType: "text/javascript; charset=utf-8",
+  }],
+  ["/games/shield-tap/index.wasm", {
+    path: "games/shield-tap/index.wasm",
+    contentType: "application/wasm",
+  }],
+  ["/games/shield-tap/index.pck", {
+    path: "games/shield-tap/index.pck",
+    contentType: "application/octet-stream",
+  }],
+  ["/games/shield-tap/index.png", {
+    path: "games/shield-tap/index.png",
+    contentType: "image/png",
+  }],
+  ["/games/shield-tap/index.icon.png", {
+    path: "games/shield-tap/index.icon.png",
+    contentType: "image/png",
+  }],
+  ["/games/shield-tap/index.apple-touch-icon.png", {
+    path: "games/shield-tap/index.apple-touch-icon.png",
+    contentType: "image/png",
+  }],
 ]);
 
 type AppState = {
@@ -229,6 +269,10 @@ export async function handleRequest(
     });
   }
 
+  if (url.pathname === "/games/shield-tap") {
+    return Response.redirect(new URL("/games/shield-tap/", url), 308);
+  }
+
   const file = staticFiles.get(url.pathname) ||
     (url.pathname === "/chat" || url.pathname.startsWith("/chat/")
       ? { path: "chat/index.html", contentType: "text/html; charset=utf-8" }
@@ -239,6 +283,10 @@ export async function handleRequest(
       : undefined);
   if (!file) return new Response("Not found", { status: 404 });
 
+  const contentSecurityPolicy = file.path.startsWith("games/shield-tap/")
+    ? "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    : "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+
   try {
     const body = await Deno.readFile(new URL(file.path, import.meta.url));
     return new Response(request.method === "HEAD" ? null : body, {
@@ -248,8 +296,7 @@ export async function handleRequest(
           ? "no-cache"
           : "public, max-age=3600",
         "x-content-type-options": "nosniff",
-        "content-security-policy":
-          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "content-security-policy": contentSecurityPolicy,
         "referrer-policy": "same-origin",
         "x-frame-options": "DENY",
       },
